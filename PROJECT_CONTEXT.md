@@ -1,0 +1,159 @@
+# Project Context
+
+Last updated: 2026-06-23
+
+This file is the durable context record for the Agent Delivery Orchestrator repo. Keep it free of secrets, customer data, uploaded binaries, and local runtime memory.
+
+## Product Goal
+
+Build a locally hosted visual UI for orchestrating an AI-assisted software delivery team. A user names a project, describes a feature or tool, optionally uploads requirement/sample-data files, and the agent team drives the work from requirements through architecture, implementation planning, QA, repository operations, human gates, and deployment.
+
+The tool is purpose-bound to software delivery work. It should not behave like a general chatbot for unrelated questions.
+
+## Current Architecture
+
+- Frontend: React, TypeScript, Vite.
+- Backend: Node, Express, TypeScript via `tsx`.
+- State: in-memory active run state in the backend.
+- Local runtime memory: `local-state/agent-memory.json`, ignored by Git.
+- LLM provider: OpenAI Responses API when `OPENAI_API_KEY` is present.
+- Default model: `gpt-4.1-mini`.
+- Cost control: every paid LLM call pauses for explicit user approval unless `LLM_REQUIRE_APPROVAL=false`.
+
+## Agent Team
+
+The UI and backend model five personas:
+
+- Business analyst agent: requirement discovery, scope control, user stories, acceptance criteria, stakeholder language.
+- Architect agent: architecture design, system decomposition, data flow, integration boundaries, non-functional constraints.
+- Software agent: implementation design, code structure, branch-ready tasks, engineering tradeoffs.
+- Tester agent: acceptance coverage, regression risk, test data, release evidence.
+- DevOps agent: repository operations, pull requests, environments, deployment, rollback, release traceability.
+
+Persona definitions live in code:
+
+- Agent metadata: `src/orchestratorModel.ts`
+- Persona prompts: `server/index.ts`
+
+## Workflow
+
+The delivery flow is:
+
+1. Feature intake.
+2. Parallel architecture design and user-story creation.
+3. Developer handoff, blocked until design and stories are complete.
+4. Build code.
+5. QA code.
+6. Check in code.
+7. Conduct pull request.
+8. Human manually merges.
+9. Deploy dev.
+10. Deploy stage.
+11. Human approves production.
+12. Deploy prod.
+
+Human involvement is required before production deployment.
+
+## Project And Repository Model
+
+The intake form includes a project name. The backend normalizes that project name into a GitHub-ready repository slug for the run.
+
+The DevOps branch plan is:
+
+- `dev`: lowest environment and base for feature work.
+- `stage`: promoted from `dev`.
+- `prod`: promoted from `stage` after human production approval.
+
+Feature branches are generated as `feature/<slug>` and are treated as starting from `dev`. Pull requests target `dev`; promotion flows `dev -> stage -> prod`.
+
+Current implementation prepares and displays this repository/branch plan locally. It does not yet create real GitHub repositories or branches through a GitHub API integration.
+
+## Requirements Intake
+
+The Business Analyst agent asks one question at a time until requirements are ready.
+
+In mock mode, the BA asks three fixed discovery questions, then creates a baseline requirements document.
+
+In LLM mode, the BA decides dynamically whether requirements are complete. The BA is instructed to check these gaps before completing the baseline:
+
+- users/personas
+- business outcome
+- scope boundaries
+- workflows
+- data
+- rules
+- integrations
+- audit/security
+- acceptance criteria
+- edge cases
+- deployment constraints
+
+Once the baseline exists, the BA chat remains open so the user can expand scope, add features, modify requirements, or delete existing features. Accepted changes create a new baseline requirements document version.
+
+## Uploaded Context Files
+
+The intake form supports:
+
+- Requirement documents: `.txt`, `.md`, `.docx`
+- Sample datasets: `.csv`, `.xlsx`
+
+Files are parsed in memory by the backend. Uploaded binaries are not written to disk. Extracted text, row/column summaries, and small previews become run context for BA clarification, baseline creation, architecture, stories, and downstream agent handoffs.
+
+## Guardrails
+
+The backend rejects unrelated prompts before creating a run or accepting BA chat messages.
+
+Allowed use is limited to software delivery work: feature or tool requests, requirements, scope changes, architecture, implementation, QA, repository work, deployment, and supporting context files.
+
+Sample data alone cannot start a run. It must support a feature request or requirement document.
+
+## Agent Collaboration And Learning
+
+Agents review each other's work using their own review lens. Peer reviews are stored on the active run and can be `approved`, `watch`, or `changes-requested`.
+
+The backend also writes lightweight local memory to `local-state/agent-memory.json`. Each agent keeps recent learned patterns, handoff counts, review counts, and update timestamps. This memory is injected into future prompts.
+
+This is not model training or fine-tuning. The model itself does not permanently change. Improvement happens through local memory being added to future prompt context.
+
+## LLM And Cost Rules
+
+User preference for this project:
+
+- Use `gpt-4.1-mini`.
+- Be cost efficient.
+- Before any paid LLM call, show the estimated model, input tokens, max output tokens, and estimated cost.
+- Do not approve or run paid LLM calls unless the user explicitly approves.
+
+The browser never receives the OpenAI API key. The key belongs only in local `.env`, which is ignored by Git.
+
+## Cloud Deployment Direction
+
+Azure and AWS deployment are not implemented yet. The current DevOps behavior is simulated local orchestration and handoff generation.
+
+The desired future model is:
+
+- Dev/stage deployment through scoped automation roles or service principals.
+- Prod deployment behind a human approval gate.
+- Agent triggers only approved scripts, IaC, or CI/CD workflows.
+- If blocked on permissions, the agent stops and creates an access blocker with environment, cloud, attempted action, resource, missing permission, evidence, and requested human resolution.
+
+Secrets and cloud credentials must not be committed. Future integrations should use local environment variables for development and secure secret stores or OIDC federation for CI/CD.
+
+## Known Limitations
+
+- Backend run state is in memory and resets when the API restarts.
+- Real GitHub repo/branch/PR creation is not connected yet.
+- Real AWS/Azure deployment is not connected yet.
+- Agent learning is local prompt memory, not fine-tuning.
+- Uploaded file binaries are not retained after parsing.
+- The purpose guardrail is deterministic and keyword based, so it may need refinement as use cases expand.
+
+## Useful Commands
+
+```bash
+npm install
+npm run dev:all
+npm run lint
+npm run build
+```
+

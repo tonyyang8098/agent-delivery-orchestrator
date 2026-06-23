@@ -28,6 +28,8 @@ API: http://127.0.0.1:3001/
 
 The backend is an in-memory Express API. It owns the active run state, advances simulated agent work, pauses at human approval gates, and exposes endpoints for UI polling and operator actions.
 
+Use `PROJECT_CONTEXT.md` as the durable project context file for design decisions, current behavior, constraints, and future integration direction.
+
 ## Requirements Intake
 
 New feature work starts with a named project and a Business Analyst clarification loop:
