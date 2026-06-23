@@ -1,6 +1,8 @@
 import 'dotenv/config'
 import cors from 'cors'
 import express from 'express'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import OpenAI from 'openai'
 import {
   AGENTS,
@@ -8,11 +10,14 @@ import {
   WORKFLOW,
   slugify,
   type AgentArtifact,
+  type AgentMemory,
   type AgentName,
   type GateType,
   type LlmProviderStatus,
   type LogEntry,
   type PendingLlmCall,
+  type PeerReview,
+  type PeerReviewStatus,
   type RequirementChatMessage,
   type RequirementsState,
   type Tone,
@@ -40,6 +45,7 @@ type OrchestratorRun = {
   updatedAt: string
   logEntries: LogEntry[]
   artifacts: AgentArtifact[]
+  peerReviews: PeerReview[]
   pendingLlmCall?: PendingLlmCall
 }
 
@@ -75,6 +81,104 @@ const personaPrompts: Record<AgentName, string> = {
     'You are the Tester agent. Produce QA strategy, acceptance coverage, regression risks, and test evidence. Think about failure modes and environment-specific checks.',
   'DevOps agent':
     'You are the DevOps agent. Produce repository, pull request, deployment, environment, rollback, and release-control handoffs. Respect human approval gates.',
+}
+
+const localStateDir = path.resolve(process.cwd(), 'local-state')
+const agentMemoryPath = path.join(localStateDir, 'agent-memory.json')
+
+const getAgentDefinition = (agentName: AgentName) =>
+  AGENTS.find((agent) => agent.name === agentName) ?? AGENTS[0]
+
+const createInitialAgentMemory = (): AgentMemory[] =>
+  AGENTS.map((agent) => ({
+    agentName: agent.name,
+    specialization: agent.specialization,
+    reviewLens: agent.reviewLens,
+    learnedPatterns: ['Use the baseline requirements document as the source of truth.'],
+    handoffCount: 0,
+    reviewCount: 0,
+    updatedAt: new Date().toISOString(),
+  }))
+
+const normalizeAgentMemory = (storedMemory: unknown): AgentMemory[] => {
+  const stored = Array.isArray(storedMemory)
+    ? (storedMemory as Partial<AgentMemory>[])
+    : []
+
+  return createInitialAgentMemory().map((initialMemory) => {
+    const existing = stored.find(
+      (memory) => memory.agentName === initialMemory.agentName,
+    )
+
+    return {
+      ...initialMemory,
+      learnedPatterns:
+        Array.isArray(existing?.learnedPatterns) && existing.learnedPatterns.length > 0
+          ? existing.learnedPatterns.slice(0, 8)
+          : initialMemory.learnedPatterns,
+      handoffCount:
+        typeof existing?.handoffCount === 'number'
+          ? existing.handoffCount
+          : initialMemory.handoffCount,
+      reviewCount:
+        typeof existing?.reviewCount === 'number'
+          ? existing.reviewCount
+          : initialMemory.reviewCount,
+      updatedAt:
+        typeof existing?.updatedAt === 'string'
+          ? existing.updatedAt
+          : initialMemory.updatedAt,
+    }
+  })
+}
+
+const loadAgentMemory = () => {
+  if (!existsSync(agentMemoryPath)) return createInitialAgentMemory()
+
+  try {
+    return normalizeAgentMemory(JSON.parse(readFileSync(agentMemoryPath, 'utf8')))
+  } catch (error) {
+    console.warn('Unable to load local agent memory. Starting with defaults.', error)
+    return createInitialAgentMemory()
+  }
+}
+
+let agentMemory = loadAgentMemory()
+
+const saveAgentMemory = () => {
+  try {
+    mkdirSync(localStateDir, { recursive: true })
+    writeFileSync(agentMemoryPath, `${JSON.stringify(agentMemory, null, 2)}\n`)
+  } catch (error) {
+    console.warn('Unable to save local agent memory.', error)
+  }
+}
+
+const getAgentMemory = (agentName: AgentName) =>
+  agentMemory.find((memory) => memory.agentName === agentName) ??
+  createInitialAgentMemory().find((memory) => memory.agentName === agentName)!
+
+const rememberAgentLesson = (
+  agentName: AgentName,
+  lesson: string,
+  counters: Partial<Pick<AgentMemory, 'handoffCount' | 'reviewCount'>> = {},
+) => {
+  agentMemory = agentMemory.map((memory) => {
+    if (memory.agentName !== agentName) return memory
+
+    const learnedPatterns = [
+      lesson,
+      ...memory.learnedPatterns.filter((existingLesson) => existingLesson !== lesson),
+    ].slice(0, 8)
+
+    return {
+      ...memory,
+      learnedPatterns,
+      handoffCount: memory.handoffCount + (counters.handoffCount ?? 0),
+      reviewCount: memory.reviewCount + (counters.reviewCount ?? 0),
+      updatedAt: new Date().toISOString(),
+    }
+  })
 }
 
 app.use(cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/] }))
@@ -270,13 +374,42 @@ const createMockBaDecision = (run: OrchestratorRun): BaRequirementDecision => {
   }
 }
 
+const getBaselineArtifact = (run: OrchestratorRun) =>
+  run.requirements.baselineArtifactId
+    ? run.artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
+    : undefined
+
+const getBaselineContextFile = (run: OrchestratorRun) => {
+  const baseline = getBaselineArtifact(run)
+  if (!baseline) {
+    return 'Context file baseline-requirements.md is not available yet.'
+  }
+
+  return [
+    'Context file: baseline-requirements.md',
+    '```markdown',
+    baseline.output,
+    '```',
+  ].join('\n')
+}
+
+const getRecentPeerReviewContext = (run: OrchestratorRun) => {
+  const reviews = run.peerReviews
+    .slice(-8)
+    .map(
+      (review) =>
+        `${review.reviewerAgent} reviewed ${review.targetAgent} during ${review.stepLabel}: ${review.status} - ${review.recommendation}`,
+    )
+    .join('\n')
+
+  return reviews ? `Recent team reviews:\n${reviews}` : 'Recent team reviews: none'
+}
+
 const buildBaRequirementInput = (run: OrchestratorRun) => {
   const transcript = run.requirements.messages
     .map((message) => `${message.role === 'ba' ? 'BA' : 'User'}: ${message.content}`)
     .join('\n')
-  const currentBaseline = run.requirements.baselineArtifactId
-    ? run.artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
-    : undefined
+  const currentBaseline = getBaselineArtifact(run)
 
   return [
     `Feature request: ${run.featureRequest}`,
@@ -388,6 +521,9 @@ const continueBaRequirements = async (
       run.artifacts = [...run.artifacts, artifact]
       run.requirements.status = 'complete'
       run.requirements.baselineArtifactId = artifact.id
+      const peerReviews = createPeerReviews(run, WORKFLOW[0], [artifact])
+      run.peerReviews = [...run.peerReviews, ...peerReviews].slice(-120)
+      updateAgentMemoryFromStep(run, WORKFLOW[0], [artifact], peerReviews)
       if (!hadBaseline && run.currentStepIndex < 1) {
         run.currentStepIndex = 1
         run.isRunning = true
@@ -398,6 +534,12 @@ const continueBaRequirements = async (
         hadBaseline
           ? 'Baseline requirements document updated from BA scope chat.'
           : 'Baseline requirements document created and handed off to developer agents.',
+        'success',
+      )
+      appendLog(
+        run,
+        'Team review',
+        `${peerReviews.length} baseline checks completed before developer handoff.`,
         'success',
       )
       if (run.isRunning) scheduleRun(run.id)
@@ -421,6 +563,9 @@ const continueBaRequirements = async (
       run.artifacts = [...run.artifacts, artifact]
       run.requirements.status = 'complete'
       run.requirements.baselineArtifactId = artifact.id
+      const peerReviews = createPeerReviews(run, WORKFLOW[0], [artifact])
+      run.peerReviews = [...run.peerReviews, ...peerReviews].slice(-120)
+      updateAgentMemoryFromStep(run, WORKFLOW[0], [artifact], peerReviews)
       if (!hadBaseline && run.currentStepIndex < 1) {
         run.currentStepIndex = 1
         run.isRunning = true
@@ -432,6 +577,12 @@ const continueBaRequirements = async (
           ? 'Mock baseline requirements revision created after LLM fallback.'
           : 'Mock baseline requirements document created after LLM fallback.',
         'warning',
+      )
+      appendLog(
+        run,
+        'Team review',
+        `${peerReviews.length} baseline checks completed before developer handoff.`,
+        'success',
       )
       if (run.isRunning) scheduleRun(run.id)
       return
@@ -466,6 +617,8 @@ const buildAgentInput = (
   step: WorkflowStep,
   agentName: AgentName,
 ) => {
+  const agent = getAgentDefinition(agentName)
+  const memory = getAgentMemory(agentName)
   const priorArtifacts = run.artifacts
     .slice(-6)
     .map(
@@ -481,7 +634,16 @@ const buildAgentInput = (
     `Environment: ${step.environment}`,
     `Step objective: ${step.detail}`,
     `Assigned persona: ${agentName}`,
+    `Specialization: ${agent.specialization}`,
+    `Review responsibility: ${agent.reviewLens}`,
+    '',
+    getBaselineContextFile(run),
+    '',
+    'Agent memory:',
+    memory.learnedPatterns.map((lesson) => `- ${lesson}`).join('\n'),
+    '',
     priorArtifacts ? `Recent handoffs:\n${priorArtifacts}` : 'Recent handoffs: none',
+    getRecentPeerReviewContext(run),
     '',
     'Create the concrete handoff artifact for this step.',
     'Use these short markdown sections:',
@@ -499,12 +661,20 @@ const createMockArtifact = (
   agentName: AgentName,
 ): AgentArtifact => {
   const persona = agentName.replace(' agent', '')
+  const agent = getAgentDefinition(agentName)
+  const baseline = getBaselineArtifact(run)
+  const memory = getAgentMemory(agentName)
   const output = [
     `### Deliverable`,
     `${persona} prepared the local handoff for ${step.label.toLowerCase()} against "${run.featureRequest}".`,
     '',
     `### Evidence`,
+    baseline
+      ? `Used baseline-requirements.md from ${baseline.title} as the shared context file.`
+      : `Used the feature request as context because the baseline document is not ready yet.`,
+    `Specialist lens: ${agent.specialization}`,
     `The workflow advanced through ${step.environment} with simulated evidence for ${step.agents.join(', ')}.`,
+    `Recent memory: ${memory.learnedPatterns[0] ?? 'No learned patterns yet.'}`,
     '',
     `### Risks / next handoff`,
     `Replace mock mode with OPENAI_API_KEY-backed calls, then connect this step to the real repository, CI, and deployment tools.`,
@@ -556,6 +726,117 @@ const createOpenAIArtifact = async (
   }
 }
 
+const getPeerReviewStatus = (
+  reviewerAgent: AgentName,
+  artifact: AgentArtifact,
+  step: WorkflowStep,
+): PeerReviewStatus => {
+  const output = artifact.output.toLowerCase()
+  if (reviewerAgent === 'Business analyst agent' && !output.includes('baseline')) {
+    return 'changes-requested'
+  }
+
+  if (
+    (reviewerAgent === 'Tester agent' && ['solution-plan', 'build-code', 'pull-request'].includes(step.id)) ||
+    (reviewerAgent === 'DevOps agent' && ['check-in', 'pull-request', 'deploy-stage'].includes(step.id)) ||
+    (reviewerAgent === 'Software agent' && ['qa-code', 'deploy-stage', 'deploy-prod'].includes(step.id))
+  ) {
+    return 'watch'
+  }
+
+  return 'approved'
+}
+
+const getReviewRecommendation = (
+  reviewerAgent: AgentName,
+  step: WorkflowStep,
+  status: PeerReviewStatus,
+) => {
+  const prefix =
+    status === 'changes-requested'
+      ? 'Add missing baseline traceability before this handoff is relied on.'
+      : status === 'watch'
+        ? 'Carry this forward as a watch item.'
+        : 'No blocker found.'
+
+  if (reviewerAgent === 'Business analyst agent') {
+    return `${prefix} Keep ${step.label.toLowerCase()} aligned to the approved scope and acceptance criteria.`
+  }
+
+  if (reviewerAgent === 'Software agent') {
+    return `${prefix} Keep implementation tasks small, dependency impact explicit, and branch work traceable.`
+  }
+
+  if (reviewerAgent === 'Tester agent') {
+    return `${prefix} Cover acceptance paths, edge cases, regression risk, and test evidence before the next gate.`
+  }
+
+  return `${prefix} Keep repository, deployment, rollback, and environment evidence ready for the release path.`
+}
+
+const createPeerReviews = (
+  run: OrchestratorRun,
+  step: WorkflowStep,
+  artifacts: AgentArtifact[],
+): PeerReview[] => {
+  const baseline = getBaselineArtifact(run)
+
+  return artifacts.flatMap((artifact) =>
+    AGENTS.filter((agent) => agent.name !== artifact.agentName).map((reviewer) => {
+      const status = getPeerReviewStatus(reviewer.name, artifact, step)
+      const target = getAgentDefinition(artifact.agentName)
+
+      return {
+        id: createId(),
+        stepId: step.id,
+        stepLabel: step.label,
+        reviewerAgent: reviewer.name,
+        targetAgent: artifact.agentName,
+        targetArtifactId: artifact.id,
+        status,
+        finding: `${reviewer.shortName} checked ${target.shortName}'s ${step.label.toLowerCase()} handoff against ${baseline?.title ?? 'the feature request'} using this review lens: ${reviewer.reviewLens}`,
+        recommendation: getReviewRecommendation(reviewer.name, step, status),
+        createdAt: new Date().toISOString(),
+      }
+    }),
+  )
+}
+
+const updateAgentMemoryFromStep = (
+  run: OrchestratorRun,
+  step: WorkflowStep,
+  artifacts: AgentArtifact[],
+  peerReviews: PeerReview[],
+) => {
+  const baseline = getBaselineArtifact(run)
+
+  artifacts.forEach((artifact) => {
+    rememberAgentLesson(
+      artifact.agentName,
+      `${step.label}: anchor handoffs to ${baseline?.title ?? 'baseline-requirements.md'} and address peer review notes before the next gate.`,
+      { handoffCount: 1 },
+    )
+  })
+
+  peerReviews.forEach((review) => {
+    const reviewer = getAgentDefinition(review.reviewerAgent)
+    rememberAgentLesson(
+      review.reviewerAgent,
+      `${step.label}: reviewed ${review.targetAgent.replace(' agent', '')} through ${reviewer.reviewLens}`,
+      { reviewCount: 1 },
+    )
+
+    if (review.status !== 'approved') {
+      rememberAgentLesson(
+        review.targetAgent,
+        `${step.label}: ${review.reviewerAgent.replace(' agent', '')} flagged a ${review.status} review item: ${review.recommendation}`,
+      )
+    }
+  })
+
+  saveAgentMemory()
+}
+
 const createAgentArtifacts = async (
   run: OrchestratorRun,
   step: WorkflowStep,
@@ -583,6 +864,7 @@ const createAgentArtifacts = async (
   }
 
   run.artifacts = [...run.artifacts, ...artifacts].slice(-40)
+  return artifacts
 }
 
 const getActiveRun = () =>
@@ -633,6 +915,7 @@ const getRunFlags = (run: OrchestratorRun) => {
 const serializeRun = (run: OrchestratorRun) => ({
   ...run,
   ...getRunFlags(run),
+  agentMemory,
   llmProvider: getLlmProvider(),
 })
 
@@ -716,7 +999,16 @@ const completeActiveStep = async (
         options.forceMock ? 'mock' : getLlmProvider().mode
       } provider.`,
     )
-    await createAgentArtifacts(run, step, options.forceMock)
+    const newArtifacts = await createAgentArtifacts(run, step, options.forceMock)
+    const peerReviews = createPeerReviews(run, step, newArtifacts)
+    run.peerReviews = [...run.peerReviews, ...peerReviews].slice(-120)
+    updateAgentMemoryFromStep(run, step, newArtifacts, peerReviews)
+    appendLog(
+      run,
+      'Team review',
+      `${peerReviews.length} cross-agent checks completed and local memory updated.`,
+      'success',
+    )
 
     appendLog(
       run,
@@ -783,6 +1075,7 @@ app.get('/health', (_request, response) => {
     activeRunId,
     workflowSteps: WORKFLOW.length,
     llmProvider: getLlmProvider(),
+    agentMemory,
   })
 })
 
@@ -792,6 +1085,7 @@ app.get('/api/workflow', (_request, response) => {
     agents: AGENTS,
     environments: ENVIRONMENTS,
     llmProvider: getLlmProvider(),
+    agentMemory,
   })
 })
 
@@ -839,6 +1133,7 @@ app.post('/api/runs', async (request, response) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     artifacts: [],
+    peerReviews: [],
     logEntries: [
       makeLogEntry('User request', featureRequest),
       makeLogEntry(

@@ -23,6 +23,8 @@ export type Agent = {
   name: AgentName
   shortName: string
   mission: string
+  specialization: string
+  reviewLens: string
 }
 
 export type EnvironmentTarget = {
@@ -51,6 +53,31 @@ export type AgentArtifact = {
   provider: 'openai' | 'mock'
   model: string
   createdAt: string
+}
+
+export type PeerReviewStatus = 'approved' | 'watch' | 'changes-requested'
+
+export type PeerReview = {
+  id: string
+  stepId: string
+  stepLabel: string
+  reviewerAgent: AgentName
+  targetAgent: AgentName
+  targetArtifactId: string
+  status: PeerReviewStatus
+  finding: string
+  recommendation: string
+  createdAt: string
+}
+
+export type AgentMemory = {
+  agentName: AgentName
+  specialization: string
+  reviewLens: string
+  learnedPatterns: string[]
+  handoffCount: number
+  reviewCount: number
+  updatedAt: string
 }
 
 export type LlmProviderStatus = {
@@ -186,21 +213,29 @@ export const AGENTS: Agent[] = [
     name: 'Business analyst agent',
     shortName: 'Business analyst',
     mission: 'Requirements, acceptance criteria, and release notes.',
+    specialization: 'Requirement discovery, scope control, acceptance criteria, and stakeholder language.',
+    reviewLens: 'Checks whether work stays aligned to the baseline requirements document.',
   },
   {
     name: 'Software agent',
     shortName: 'Software',
     mission: 'Code implementation, branch work, and commits.',
+    specialization: 'Implementation design, code structure, branch-ready tasks, and engineering tradeoffs.',
+    reviewLens: 'Checks feasibility, dependency impact, maintainability, and implementation sequence.',
   },
   {
     name: 'Tester agent',
     shortName: 'Tester',
     mission: 'QA coverage, regression checks, and evidence.',
+    specialization: 'Acceptance coverage, regression risk, test data, and release evidence.',
+    reviewLens: 'Checks testability, edge cases, acceptance criteria coverage, and failure modes.',
   },
   {
     name: 'DevOps agent',
     shortName: 'DevOps',
     mission: 'PR operations, environments, and deployments.',
+    specialization: 'Repository operations, pull requests, environments, deployment, and rollback.',
+    reviewLens: 'Checks deployment readiness, environment gates, rollback path, and release traceability.',
   },
 ]
 

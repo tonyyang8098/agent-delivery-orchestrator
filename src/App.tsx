@@ -36,11 +36,13 @@ import {
   WORKFLOW,
   slugify,
   type AgentArtifact,
+  type AgentMemory,
   type AgentName,
   type GateType,
   type LlmProviderStatus,
   type LogEntry,
   type PendingLlmCall,
+  type PeerReview,
   type RequirementsState,
   type StepState,
   type WorkflowStep,
@@ -78,6 +80,8 @@ type OrchestratorRun = {
   progress: number
   status: RunStatus
   artifacts: AgentArtifact[]
+  peerReviews: PeerReview[]
+  agentMemory: AgentMemory[]
   llmProvider: LlmProviderStatus
   pendingLlmCall?: PendingLlmCall
 }
@@ -88,6 +92,7 @@ type RunResponse = {
 
 type HealthResponse = {
   llmProvider: LlmProviderStatus
+  agentMemory: AgentMemory[]
 }
 
 type ApiErrorResponse = {
@@ -169,6 +174,7 @@ function App() {
     model: 'mock-local-persona',
     configured: false,
   })
+  const [agentMemory, setAgentMemory] = useState<AgentMemory[]>([])
 
   const runStarted = Boolean(run)
   const currentStepIndex = run?.currentStepIndex ?? 0
@@ -185,6 +191,7 @@ function App() {
   const progress = run?.progress ?? 0
   const logEntries = run?.logEntries ?? defaultLogEntries
   const artifacts = run?.artifacts ?? []
+  const peerReviews = run?.peerReviews ?? []
   const pendingLlmCall = run?.pendingLlmCall
   const requirementMessages = run?.requirements.messages ?? []
   const baselineRequirement = run?.requirements.baselineArtifactId
@@ -207,6 +214,7 @@ function App() {
       setApiStatus('online')
       setApiError(null)
       setLlmProvider(response.run?.llmProvider ?? health.llmProvider)
+      setAgentMemory(response.run?.agentMemory ?? health.agentMemory ?? [])
       setRun(response.run)
       if (response.run) setFeatureRequest(response.run.featureRequest)
     } catch (error) {
@@ -236,6 +244,7 @@ function App() {
   const applyRunResponse = (response: RunResponse) => {
     setRun(response.run)
     if (response.run?.llmProvider) setLlmProvider(response.run.llmProvider)
+    if (response.run?.agentMemory) setAgentMemory(response.run.agentMemory)
     if (response.run) setFeatureRequest(response.run.featureRequest)
     setApiError(null)
   }
@@ -375,6 +384,11 @@ function App() {
       ? 'Assigned workflow is complete.'
       : agent.mission
   }
+
+  const getAgentMemory = (agentName: AgentName) =>
+    agentMemory.find((memory) => memory.agentName === agentName)
+
+  const latestPeerReviews = peerReviews.slice(-6).reverse()
 
   const environmentStatus = (stepId: string, envName: string) => {
     const deployIndex = WORKFLOW.findIndex((step) => step.id === stepId)
@@ -700,6 +714,7 @@ function App() {
               {AGENTS.map((agent) => {
                 const Icon = agentIcons[agent.name]
                 const state = getAgentState(agent.name)
+                const memory = getAgentMemory(agent.name)
                 return (
                   <article className={`agent-row ${state.toLowerCase().replaceAll(' ', '-')}`} key={agent.name}>
                     <div className="agent-icon">
@@ -711,6 +726,13 @@ function App() {
                         <span>{state}</span>
                       </div>
                       <p>{getAgentFocus(agent)}</p>
+                      <div className="agent-learning">
+                        <span>{memory?.handoffCount ?? 0} handoffs</span>
+                        <span>{memory?.reviewCount ?? 0} reviews</span>
+                      </div>
+                      <p className="agent-lesson">
+                        {memory?.learnedPatterns[0] ?? agent.reviewLens}
+                      </p>
                     </div>
                   </article>
                 )
@@ -848,10 +870,60 @@ function App() {
           </div>
         </section>
 
+        <section className="team-panel">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">Team intelligence</p>
+              <h2>
+                <ClipboardCheck size={20} />
+                Reviews and memory
+              </h2>
+            </div>
+            <span className="status-pill">
+              {peerReviews.length} checks
+            </span>
+          </div>
+          <div className="team-layout">
+            <div className="review-list">
+              {latestPeerReviews.length === 0 ? (
+                <article className="team-empty">
+                  Cross-agent reviews appear after the baseline or a handoff is produced.
+                </article>
+              ) : (
+                latestPeerReviews.map((review) => (
+                  <article className={`review-row ${review.status}`} key={review.id}>
+                    <div className="review-meta">
+                      <span>{review.stepLabel}</span>
+                      <strong>{review.status.replace('-', ' ')}</strong>
+                    </div>
+                    <h3>
+                      {review.reviewerAgent.replace(' agent', '')} checked {review.targetAgent.replace(' agent', '')}
+                    </h3>
+                    <p>{review.finding}</p>
+                    <p>{review.recommendation}</p>
+                  </article>
+                ))
+              )}
+            </div>
+            <div className="memory-list">
+              {agentMemory.map((memory) => (
+                <article className="memory-row" key={memory.agentName}>
+                  <div className="review-meta">
+                    <span>{memory.agentName.replace(' agent', '')}</span>
+                    <strong>{memory.handoffCount + memory.reviewCount} learns</strong>
+                  </div>
+                  <h3>{memory.specialization}</h3>
+                  <p>{memory.learnedPatterns[0]}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section className="artifact-panel">
           <div className="section-heading compact">
             <div>
-              <p className="eyebrow">LLM artifacts</p>
+              <p className="eyebrow">Agent artifacts</p>
               <h2>Persona output</h2>
             </div>
             <span className="status-pill">

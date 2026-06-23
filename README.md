@@ -39,11 +39,26 @@ New feature work starts with a Business Analyst clarification loop:
 
 After the baseline exists, the BA chat stays open. The user can ask the BA to expand scope, add features, modify requirements, or delete existing features. Each accepted change creates a new baseline requirements document version and makes that version the active baseline for the run.
 
+The active baseline is treated as the shared context file for the team. Each downstream agent receives it as `baseline-requirements.md` when producing implementation, QA, repository, or deployment handoffs.
+
 The requirements chat is persisted in the active in-memory run and is exposed through:
 
 ```text
 POST /api/runs/:runId/requirements/messages
 ```
+
+## Agent Teamwork And Learning
+
+Agents now specialize and review each other through their own lens:
+
+- Business Analyst checks scope and acceptance alignment.
+- Software checks implementation feasibility and maintainability.
+- Tester checks acceptance coverage, regressions, and edge cases.
+- DevOps checks PR, environment, deployment, rollback, and release evidence.
+
+When the BA creates or revises the baseline, the other agents review it before developer handoff. When a workflow step completes, the non-author agents review each handoff and create peer review records with `approved`, `watch`, or `changes-requested` status.
+
+The backend also keeps local agent memory in `local-state/agent-memory.json`. This file is ignored by Git so the agents can learn from local runs without uploading runtime memory to GitHub. Memory is used in future prompts and visible in the UI as handoff counts, review counts, and the latest learned pattern for each specialist.
 
 ## LLM Persona Setup
 

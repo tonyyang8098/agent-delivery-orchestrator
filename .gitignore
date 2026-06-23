@@ -10,6 +10,7 @@ lerna-debug.log*
 .env
 .env.*
 !.env.example
+local-state/
 
 node_modules
 dist
