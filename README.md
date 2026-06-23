@@ -30,15 +30,24 @@ The backend is an in-memory Express API. It owns the active run state, advances 
 
 ## Requirements Intake
 
-New feature work starts with a Business Analyst clarification loop:
+New feature work starts with a named project and a Business Analyst clarification loop:
 
-1. The user enters the feature or tool request.
-2. The Business Analyst agent asks one clarifying question at a time.
-3. The user answers until the BA determines the baseline requirements are complete.
-4. The BA creates a baseline requirements document.
-5. The Architect agent designs the solution while the BA creates user stories in the same parallel planning gate.
-6. The orchestrator waits until both design and stories are finalized.
-7. The orchestrator hands developer-ready stories and technical notes to the Software, Tester, and DevOps agents.
+1. The user enters the project name. The backend normalizes it into the GitHub-ready repository name for the run.
+2. The user enters the feature or tool request.
+3. The Business Analyst agent asks one clarifying question at a time.
+4. The user answers until the BA determines the baseline requirements are complete.
+5. The BA creates a baseline requirements document.
+6. The Architect agent designs the solution while the BA creates user stories in the same parallel planning gate.
+7. The orchestrator waits until both design and stories are finalized.
+8. The orchestrator hands developer-ready stories and technical notes to the Software, Tester, and DevOps agents.
+
+The DevOps agent prepares the repository path for three long-lived environment branches:
+
+- `dev`: lowest environment and the base for feature work
+- `stage`: promoted from `dev` for release validation
+- `prod`: promoted from `stage` after human production approval
+
+The pull request target is `dev`; promotion then flows `dev -> stage -> prod`.
 
 After the baseline exists, the BA chat stays open. The user can ask the BA to expand scope, add features, modify requirements, or delete existing features. Each accepted change creates a new baseline requirements document version and makes that version the active baseline for the run.
 

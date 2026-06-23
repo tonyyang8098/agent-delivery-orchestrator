@@ -35,6 +35,13 @@ export type EnvironmentTarget = {
   checks: string[]
 }
 
+export type EnvironmentBranch = {
+  environment: 'Dev' | 'Stage' | 'Prod'
+  branchName: 'dev' | 'stage' | 'prod'
+  sourceBranch: string
+  promotionOrder: number
+}
+
 export type LogEntry = {
   id: string
   at: string
@@ -184,7 +191,7 @@ export const WORKFLOW: WorkflowStep[] = [
     id: 'pull-request',
     label: 'Conduct pull request',
     lane: 'Repository',
-    detail: 'Open PR, publish build evidence, and request human review.',
+    detail: 'Open PR into dev, publish build evidence, and request human review.',
     environment: 'Repository',
     agents: ['DevOps agent', 'Software agent'],
   },
@@ -192,7 +199,7 @@ export const WORKFLOW: WorkflowStep[] = [
     id: 'human-merge',
     label: 'Human merge',
     lane: 'Approval',
-    detail: 'Human manually merges the pull request before deployment begins.',
+    detail: 'Human manually merges the pull request into dev before deployment begins.',
     environment: 'Repository',
     agents: ['DevOps agent'],
     gate: 'merge',
@@ -288,6 +295,27 @@ export const ENVIRONMENTS: EnvironmentTarget[] = [
     purpose: 'Human-approved release',
     stepId: 'deploy-prod',
     checks: ['Approval gate', 'Post-deploy monitor'],
+  },
+]
+
+export const ENVIRONMENT_BRANCHES: EnvironmentBranch[] = [
+  {
+    environment: 'Dev',
+    branchName: 'dev',
+    sourceBranch: 'feature/*',
+    promotionOrder: 1,
+  },
+  {
+    environment: 'Stage',
+    branchName: 'stage',
+    sourceBranch: 'dev',
+    promotionOrder: 2,
+  },
+  {
+    environment: 'Prod',
+    branchName: 'prod',
+    sourceBranch: 'stage',
+    promotionOrder: 3,
   },
 ]
 

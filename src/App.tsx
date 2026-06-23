@@ -33,10 +33,12 @@ import {
 import {
   AGENTS,
   ENVIRONMENTS,
+  ENVIRONMENT_BRANCHES,
   WORKFLOW,
   slugify,
   type AgentArtifact,
   type AgentMemory,
+  type EnvironmentBranch,
   type AgentName,
   type GateType,
   type LlmProviderStatus,
@@ -61,8 +63,11 @@ type RunStatus =
 
 type OrchestratorRun = {
   id: string
+  projectName: string
+  repositoryName: string
   featureRequest: string
   branchName: string
+  environmentBranches: EnvironmentBranch[]
   currentStepIndex: number
   mergeApproved: boolean
   prodApproved: boolean
@@ -106,6 +111,8 @@ const API_BASE_URL =
 
 const defaultRequest =
   'Build a customer onboarding checklist with role-based approval and audit history.'
+
+const defaultProjectName = 'Customer Onboarding Platform'
 
 const defaultLogEntries: LogEntry[] = [
   {
@@ -176,6 +183,7 @@ const requestApi = async <T,>(path: string, options: RequestInit = {}) => {
 }
 
 function App() {
+  const [projectName, setProjectName] = useState(defaultProjectName)
   const [featureRequest, setFeatureRequest] = useState(defaultRequest)
   const [run, setRun] = useState<OrchestratorRun | null>(null)
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
@@ -207,6 +215,7 @@ function App() {
   const artifacts = run?.artifacts ?? []
   const peerReviews = run?.peerReviews ?? []
   const contextFiles = run?.contextFiles ?? []
+  const environmentBranches = run?.environmentBranches ?? ENVIRONMENT_BRANCHES
   const pendingLlmCall = run?.pendingLlmCall
   const requirementMessages = run?.requirements.messages ?? []
   const baselineRequirement = run?.requirements.baselineArtifactId
@@ -215,6 +224,8 @@ function App() {
   const hasRunInput = Boolean(featureRequest.trim() || selectedContextFiles.length > 0)
   const canSendRequirementMessage =
     runStarted && apiStatus === 'online' && !isSubmitting && !waitingForLlmApproval
+  const repositoryName =
+    run?.repositoryName || slugify(projectName) || 'local-delivery-project'
 
   const branchName = useMemo(() => {
     if (run?.branchName) return run.branchName
@@ -232,7 +243,10 @@ function App() {
       setLlmProvider(response.run?.llmProvider ?? health.llmProvider)
       setAgentMemory(response.run?.agentMemory ?? health.agentMemory ?? [])
       setRun(response.run)
-      if (response.run) setFeatureRequest(response.run.featureRequest)
+      if (response.run) {
+        setProjectName(response.run.projectName)
+        setFeatureRequest(response.run.featureRequest)
+      }
     } catch (error) {
       setApiStatus('offline')
       setApiError(
@@ -262,6 +276,7 @@ function App() {
     if (response.run?.llmProvider) setLlmProvider(response.run.llmProvider)
     if (response.run?.agentMemory) setAgentMemory(response.run.agentMemory)
     if (response.run) {
+      setProjectName(response.run.projectName)
       setFeatureRequest(response.run.featureRequest)
       setSelectedContextFiles([])
     }
@@ -297,6 +312,7 @@ function App() {
     if (!trimmedRequest && selectedContextFiles.length === 0) return
 
     const body = new FormData()
+    body.append('projectName', projectName.trim())
     body.append('featureRequest', trimmedRequest)
     selectedContextFiles.forEach((file) => {
       body.append('contextFiles', file)
@@ -347,6 +363,7 @@ function App() {
 
   const resetRun = () => {
     if (!run) {
+      setProjectName(defaultProjectName)
       setFeatureRequest(defaultRequest)
       setApiError(null)
       setSelectedContextFiles([])
@@ -487,6 +504,20 @@ function App() {
 
       <section className="request-panel" aria-label="Feature request">
         <div className="request-copy">
+          <div className="project-fields">
+            <label htmlFor="project-name">Project name</label>
+            <input
+              id="project-name"
+              type="text"
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+              spellCheck="true"
+              disabled={runStarted && !isComplete}
+            />
+            <span>
+              GitHub repository: <strong>{repositoryName}</strong>
+            </span>
+          </div>
           <label htmlFor="feature-request">Feature or tool request</label>
           <textarea
             id="feature-request"
@@ -566,7 +597,11 @@ function App() {
             </strong>
           </div>
           <div>
-            <span>Branch</span>
+            <span>Repository</span>
+            <strong>{repositoryName}</strong>
+          </div>
+          <div>
+            <span>Feature branch</span>
             <strong>{branchName}</strong>
           </div>
         </div>
@@ -866,11 +901,24 @@ function App() {
           </div>
 
           <div className="repo-details">
+            <div className="repo-name-line">
+              <GitBranch size={18} />
+              <span>{repositoryName}</span>
+            </div>
             <div className="branch-line">
               <GitBranch size={18} />
+              <span>dev</span>
+              <ArrowRight size={16} />
               <span>{branchName}</span>
               <ArrowRight size={16} />
-              <span>main</span>
+              <span>dev</span>
+            </div>
+            <div className="branch-promotion">
+              {environmentBranches.map((branch) => (
+                <span key={branch.branchName}>
+                  {branch.branchName}
+                </span>
+              ))}
             </div>
             <div className="check-grid">
               {readinessChecks.map(([label, stepId, Icon]) => (
@@ -900,6 +948,13 @@ function App() {
                     <div>
                       <h3>{environment.name}</h3>
                       <p>{environment.purpose}</p>
+                      <span className="env-branch">
+                        Branch: {
+                          environmentBranches.find(
+                            (branch) => branch.environment === environment.name,
+                          )?.branchName ?? environment.name.toLowerCase()
+                        }
+                      </span>
                     </div>
                     <strong>{status}</strong>
                   </div>

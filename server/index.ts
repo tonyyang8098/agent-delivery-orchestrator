@@ -10,9 +10,11 @@ import { readSheet } from 'read-excel-file/node'
 import {
   AGENTS,
   ENVIRONMENTS,
+  ENVIRONMENT_BRANCHES,
   WORKFLOW,
   slugify,
   type AgentArtifact,
+  type EnvironmentBranch,
   type AgentMemory,
   type AgentName,
   type GateType,
@@ -39,9 +41,12 @@ type RunStatus =
 
 type OrchestratorRun = {
   id: string
+  projectName: string
+  repositoryName: string
   featureRequest: string
   requirements: RequirementsState
   branchName: string
+  environmentBranches: EnvironmentBranch[]
   currentStepIndex: number
   mergeApproved: boolean
   prodApproved: boolean
@@ -505,6 +510,14 @@ const buildMockRequirementsDocument = (run: OrchestratorRun) => {
   return [
     '# Baseline Requirements Document',
     '',
+    '## Project',
+    `Name: ${run.projectName}`,
+    `GitHub repository: ${run.repositoryName}`,
+    `Feature branch: ${run.branchName}`,
+    '',
+    '## Environment Branch Strategy',
+    formatEnvironmentBranchPlan(run.environmentBranches),
+    '',
     `## Feature`,
     run.featureRequest,
     '',
@@ -830,6 +843,26 @@ const firstSentence = (value: string) => {
   return match?.[1] ?? normalized.slice(0, 180)
 }
 
+const cleanProjectName = (value: string) =>
+  normalizeText(value)
+    .replace(/[<>:"/\\|?*]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+
+const deriveProjectName = (projectName: string, featureRequest: string) =>
+  cleanProjectName(projectName) ||
+  cleanProjectName(firstSentence(featureRequest).replace(/[.!?]+$/g, '')) ||
+  'Local Delivery Project'
+
+const formatEnvironmentBranchPlan = (branches: EnvironmentBranch[]) =>
+  branches
+    .map(
+      (branch) =>
+        `${branch.promotionOrder}. ${branch.environment}: ${branch.branchName} from ${branch.sourceBranch}`,
+    )
+    .join('\n')
+
 type PurposeGuardrailResult =
   | { allowed: true }
   | { allowed: false; error: string }
@@ -965,8 +998,12 @@ const buildAgentInput = (
     .join('\n')
 
   return [
+    `Project: ${run.projectName}`,
+    `GitHub repository: ${run.repositoryName}`,
     `Feature request: ${run.featureRequest}`,
-    `Branch: ${run.branchName}`,
+    `Feature branch: ${run.branchName}`,
+    'Feature work starts from the dev branch. DevOps owns the environment branch setup and promotion path.',
+    `Environment branch plan:\n${formatEnvironmentBranchPlan(run.environmentBranches)}`,
     `Current step: ${step.label}`,
     `Environment: ${step.environment}`,
     `Step objective: ${step.detail}`,
@@ -1021,6 +1058,9 @@ const createMockArtifact = (
     baseline
       ? `Used baseline-requirements.md from ${baseline.title} as the shared context file.`
       : `Used the feature request as context because the baseline document is not ready yet.`,
+    `Repository: ${run.repositoryName}.`,
+    `Feature branch: ${run.branchName}, based from dev.`,
+    `Environment branches: ${run.environmentBranches.map((branch) => branch.branchName).join(' -> ')}.`,
     uploadedContext,
     `Specialist lens: ${agent.specialization}`,
     `The workflow advanced through ${step.environment} with simulated evidence for ${step.agents.join(', ')}.`,
@@ -1460,6 +1500,10 @@ app.get('/api/runs/:runId', (request, response) => {
 })
 
 app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), async (request, response) => {
+  const requestedProjectName =
+    typeof request.body?.projectName === 'string'
+      ? request.body.projectName.trim()
+      : ''
   const featureRequest =
     typeof request.body?.featureRequest === 'string'
       ? request.body.featureRequest.trim()
@@ -1500,15 +1544,20 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
 
   if (activeRunId) clearRunTimer(activeRunId)
 
+  const projectName = deriveProjectName(requestedProjectName, derivedFeatureRequest)
+  const repositoryName = slugify(projectName) || 'local-delivery-project'
   const slug = slugify(derivedFeatureRequest) || 'new-local-work-item'
   const run: OrchestratorRun = {
     id: createId(),
+    projectName,
+    repositoryName,
     featureRequest: derivedFeatureRequest,
     requirements: {
       status: 'clarifying',
       messages: [makeRequirementMessage('user', derivedFeatureRequest)],
     },
     branchName: `feature/${slug}`,
+    environmentBranches: ENVIRONMENT_BRANCHES,
     currentStepIndex: 0,
     mergeApproved: false,
     prodApproved: false,
@@ -1523,6 +1572,11 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
       makeLogEntry(
         'Orchestrator',
         'Run started. Business analyst agent is gathering requirements.',
+        'success',
+      ),
+      makeLogEntry(
+        'DevOps agent',
+        `Prepared GitHub repository plan ${repositoryName} with environment branches dev, stage, and prod. Feature work starts from dev.`,
         'success',
       ),
       ...(contextFiles.length > 0
