@@ -73,6 +73,8 @@ type OrchestratorRun = {
   id: string
   projectName: string
   repositoryName: string
+  githubOwner: string
+  repositoryUrl: string
   featureRequest: string
   branchName: string
   environmentBranches: EnvironmentBranch[]
@@ -128,6 +130,9 @@ const defaultRequest =
   'Build a customer onboarding checklist with role-based approval and audit history.'
 
 const defaultProjectName = 'Customer Onboarding Platform'
+const defaultGithubOwner = import.meta.env.VITE_GITHUB_OWNER ?? 'tonyyang8098'
+const defaultGithubBaseUrl =
+  import.meta.env.VITE_GITHUB_BASE_URL ?? 'https://github.com'
 
 const defaultLogEntries: LogEntry[] = [
   {
@@ -289,6 +294,10 @@ function App() {
     runStarted && apiStatus === 'online' && !isSubmitting && !waitingForLlmApproval
   const repositoryName =
     run?.repositoryName || slugify(projectName) || 'local-delivery-project'
+  const githubOwner = run?.githubOwner || defaultGithubOwner
+  const repositoryUrl =
+    run?.repositoryUrl ||
+    `${defaultGithubBaseUrl.replace(/\/+$/, '')}/${githubOwner.replace(/^@/, '')}/${repositoryName}`
 
   const branchName = useMemo(() => {
     if (run?.branchName) return run.branchName
@@ -754,7 +763,11 @@ function App() {
               disabled={runStarted && !isComplete}
             />
             <span>
-              GitHub repository: <strong>{repositoryName}</strong>
+              GitHub target:{' '}
+              <a className="repository-link" href={repositoryUrl} target="_blank" rel="noreferrer">
+                <strong>{repositoryUrl}</strong>
+                <ExternalLink size={13} />
+              </a>
             </span>
           </div>
           <label htmlFor="feature-request">Feature or tool request</label>
@@ -838,8 +851,8 @@ function App() {
             </strong>
           </div>
           <div>
-            <span>Repository</span>
-            <strong>{repositoryName}</strong>
+            <span>GitHub target</span>
+            <strong>{githubOwner}/{repositoryName}</strong>
           </div>
           <div>
             <span>Feature branch</span>
@@ -1289,7 +1302,10 @@ function App() {
           <div className="repo-details">
             <div className="repo-name-line">
               <GitBranch size={18} />
-              <span>{repositoryName}</span>
+              <a href={repositoryUrl} target="_blank" rel="noreferrer">
+                <span>{githubOwner}/{repositoryName}</span>
+                <ExternalLink size={14} />
+              </a>
             </div>
             <div className="branch-line">
               <GitBranch size={18} />

@@ -30,6 +30,15 @@ The backend is an in-memory Express API. It owns the active run state, advances 
 
 Use `PROJECT_CONTEXT.md` as the durable project context file for design decisions, current behavior, constraints, and future integration direction.
 
+Set the GitHub account used for new project targets in `.env`:
+
+```text
+GITHUB_OWNER=tonyyang8098
+GITHUB_BASE_URL=https://github.com
+VITE_GITHUB_OWNER=tonyyang8098
+VITE_GITHUB_BASE_URL=https://github.com
+```
+
 ## Local Preview And Testing
 
 The UI includes a **Preview & smoke checks** workspace section. After starting a run, choose **Build local preview** to generate a deterministic local artifact under:
@@ -65,13 +74,19 @@ New feature work starts with a named project and a Business Analyst clarificatio
 7. The orchestrator waits until both design and stories are finalized.
 8. The orchestrator hands developer-ready stories and technical notes to the Software, Tester, and DevOps agents.
 
-The DevOps agent prepares the repository path for three long-lived environment branches:
+The DevOps agent prepares the repository target under the configured GitHub owner. By default, a project named `Customer Onboarding Platform` targets:
+
+```text
+https://github.com/tonyyang8098/customer-onboarding-platform
+```
+
+The DevOps agent also prepares the plan for three long-lived environment branches:
 
 - `dev`: lowest environment and the base for feature work
 - `stage`: promoted from `dev` for release validation
 - `prod`: promoted from `stage` after human production approval
 
-The pull request target is `dev`; promotion then flows `dev -> stage -> prod`.
+The pull request target is `dev`; promotion then flows `dev -> stage -> prod`. This is currently a local orchestration target and handoff. Real GitHub repository creation, branch creation, commits, and pull requests still need a GitHub adapter/token integration before the app can perform those actions directly.
 
 For deployment access, DevOps creates an access blocker when scoped AWS/Azure access has not been verified for the target environment. The blocker tells the human what identity, permissions, secret handling, and environment scope are required. The run remains paused until the human marks setup complete; in local mode DevOps records that verification and resumes. Future cloud adapters should replace that local verification with real IAM/RBAC checks.
 

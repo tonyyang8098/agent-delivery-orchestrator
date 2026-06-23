@@ -893,6 +893,25 @@ button:not(:disabled):active {
   color: var(--text-strong);
 }
 
+.repository-link {
+  align-items: center;
+  color: var(--accent);
+  display: inline-flex;
+  gap: 5px;
+  max-width: 100%;
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+.repository-link:hover {
+  color: var(--accent-dark);
+  text-decoration: underline;
+}
+
+.repository-link strong {
+  color: inherit;
+}
+
 .context-upload {
   display: grid;
   gap: 8px;
@@ -1634,6 +1653,19 @@ textarea:disabled {
 }
 
 .repo-name-line svg {
+  color: var(--accent);
+}
+
+.repo-name-line a {
+  align-items: center;
+  color: var(--text-strong);
+  display: inline-flex;
+  gap: 7px;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.repo-name-line a:hover {
   color: var(--accent);
 }
 

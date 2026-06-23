@@ -67,6 +67,19 @@ Human involvement is required before production deployment.
 
 The intake form includes a project name. The backend normalizes that project name into a GitHub-ready repository slug for the run.
 
+New project runs now target the configured GitHub owner. The current default is:
+
+```text
+GITHUB_OWNER=tonyyang8098
+GITHUB_BASE_URL=https://github.com
+```
+
+For example, a project named `Customer Onboarding Platform` points to:
+
+```text
+https://github.com/tonyyang8098/customer-onboarding-platform
+```
+
 The DevOps branch plan is:
 
 - `dev`: lowest environment and base for feature work.
@@ -75,7 +88,7 @@ The DevOps branch plan is:
 
 Feature branches are generated as `feature/<slug>` and are treated as starting from `dev`. Pull requests target `dev`; promotion flows `dev -> stage -> prod`.
 
-Current implementation prepares and displays this repository/branch plan locally. It does not yet create real GitHub repositories or branches through a GitHub API integration.
+Current implementation prepares and displays this GitHub repository target and branch plan locally. It does not yet create real GitHub repositories, branches, commits, or pull requests through a GitHub API integration.
 
 ## Requirements Intake
 
@@ -205,7 +218,7 @@ Secrets and cloud credentials must not be committed. Future integrations should 
 ## Known Limitations
 
 - Backend run state is in memory and resets when the API restarts.
-- Real GitHub repo/branch/PR creation is not connected yet.
+- New projects point to the configured GitHub owner URL, but real GitHub repo/branch/PR creation is not connected yet.
 - Real AWS/Azure deployment is not connected yet.
 - Deployment access verification is local/manual until cloud adapters are added.
 - Local preview generation is template-based. Only Pong currently becomes a playable prototype; other projects receive a static local brief until project-specific generators are added.

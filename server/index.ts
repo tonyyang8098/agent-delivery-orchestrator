@@ -52,6 +52,8 @@ type OrchestratorRun = {
   id: string
   projectName: string
   repositoryName: string
+  githubOwner: string
+  repositoryUrl: string
   featureRequest: string
   requirements: RequirementsState
   branchName: string
@@ -97,6 +99,10 @@ const requireLlmApproval = process.env.LLM_REQUIRE_APPROVAL !== 'false'
 const llmMaxOutputTokens = parsePositiveInteger(process.env.LLM_MAX_OUTPUT_TOKENS, 300)
 const maxContextFiles = parsePositiveInteger(process.env.CONTEXT_FILE_LIMIT, 6)
 const maxContextFileBytes = parsePositiveInteger(process.env.CONTEXT_FILE_MAX_BYTES, 5 * 1024 * 1024)
+const githubOwner = (process.env.GITHUB_OWNER || 'tonyyang8098')
+  .trim()
+  .replace(/^@/, '')
+const githubBaseUrl = (process.env.GITHUB_BASE_URL || 'https://github.com').replace(/\/+$/, '')
 
 type RunnableLlmMode = Exclude<LlmMode, 'mixed'>
 
@@ -700,7 +706,8 @@ const buildMockRequirementsDocument = (run: OrchestratorRun) => {
     '',
     '## Project',
     `Name: ${run.projectName}`,
-    `GitHub repository: ${run.repositoryName}`,
+    `GitHub owner: ${run.githubOwner}`,
+    `GitHub repository: ${run.repositoryUrl}`,
     `Feature branch: ${run.branchName}`,
     '',
     '## Environment Branch Strategy',
@@ -1166,6 +1173,15 @@ const deriveProjectName = (projectName: string, featureRequest: string) =>
   cleanProjectName(firstSentence(featureRequest).replace(/[.!?]+$/g, '')) ||
   'Local Delivery Project'
 
+const normalizeGithubOwner = (value: string) =>
+  value
+    .replace(/[^a-zA-Z0-9-]/g, '')
+    .replace(/^-+|-+$/g, '') ||
+  'tonyyang8098'
+
+const buildRepositoryUrl = (owner: string, repositoryName: string) =>
+  `${githubBaseUrl}/${normalizeGithubOwner(owner)}/${repositoryName}`
+
 const formatEnvironmentBranchPlan = (branches: EnvironmentBranch[]) =>
   branches
     .map(
@@ -1204,11 +1220,11 @@ const buildDeploymentAccessBlocker = (
   status: 'open',
   environment,
   cloudProvider: 'AWS/Azure',
-  action: `${step.label} for ${run.repositoryName}`,
+  action: `${step.label} for ${run.repositoryUrl}`,
   resource:
     environment === 'Prod'
-      ? `${run.repositoryName} production subscription/account and prod branch`
-      : `${run.repositoryName} ${environment.toLowerCase()} resource group/account and ${environment.toLowerCase()} branch`,
+      ? `${run.repositoryUrl} production subscription/account and prod branch`
+      : `${run.repositoryUrl} ${environment.toLowerCase()} resource group/account and ${environment.toLowerCase()} branch`,
   missingAccess: [
     'Scoped AWS IAM role or Azure service principal/managed identity for this environment.',
     'Permission to read deployment artifacts and environment configuration.',
@@ -1217,7 +1233,7 @@ const buildDeploymentAccessBlocker = (
   ],
   instructions: [
     `Create or confirm a scoped ${environment} deployment identity for AWS or Azure.`,
-    `Grant the identity access only to ${environment} resources needed by ${run.repositoryName}.`,
+    `Grant the identity access only to ${environment} resources needed by ${run.repositoryUrl}.`,
     'Store credentials in local .env for local testing or in GitHub Actions secrets, Azure Key Vault, AWS Secrets Manager, or OIDC federation for CI/CD.',
     environment === 'Prod'
       ? 'Keep production access separate from dev/stage and require human production approval before use.'
@@ -1714,7 +1730,8 @@ const buildAgentInput = (
 
   return [
     `Project: ${run.projectName}`,
-    `GitHub repository: ${run.repositoryName}`,
+    `GitHub owner: ${run.githubOwner}`,
+    `GitHub repository: ${run.repositoryUrl}`,
     `Feature request: ${run.featureRequest}`,
     `Feature branch: ${run.branchName}`,
     'Feature work starts from the dev branch. DevOps owns the environment branch setup and promotion path.',
@@ -1788,7 +1805,7 @@ const createMockArtifact = (
     baseline
       ? `Used baseline-requirements.md from ${baseline.title} as the shared context file.`
       : `Used the feature request as context because the baseline document is not ready yet.`,
-    `Repository: ${run.repositoryName}.`,
+    `Repository: ${run.repositoryUrl}.`,
     `Feature branch: ${run.branchName}, based from dev.`,
     `Environment branches: ${run.environmentBranches.map((branch) => branch.branchName).join(' -> ')}.`,
     activeAccessBlocker
@@ -2087,6 +2104,7 @@ const getPreviewTitle = (run: OrchestratorRun) =>
 const createPongPreviewHtml = (run: OrchestratorRun) => {
   const projectName = escapeHtml(run.projectName)
   const repositoryName = escapeHtml(run.repositoryName)
+  const repositoryUrl = escapeHtml(run.repositoryUrl)
   const featureRequest = escapeHtml(run.featureRequest)
   const branchName = escapeHtml(run.branchName)
 
@@ -2215,6 +2233,7 @@ const createPongPreviewHtml = (run: OrchestratorRun) => {
       </div>
       <div class="meta" aria-label="Preview controls">
         <span>${repositoryName}</span>
+        <span>${repositoryUrl}</span>
         <span>${branchName}</span>
         <span id="score">Player 0 : 0 Agent</span>
         <button type="button" id="restart">Restart</button>
@@ -2474,7 +2493,7 @@ const createStaticPreviewHtml = (run: OrchestratorRun) => {
       <h1>${escapeHtml(run.projectName)}</h1>
       <p>${escapeHtml(run.featureRequest)}</p>
       <div class="meta" aria-label="Project metadata">
-        <span>Repository<strong>${escapeHtml(run.repositoryName)}</strong></span>
+        <span>GitHub target<strong>${escapeHtml(run.repositoryUrl)}</strong></span>
         <span>Feature branch<strong>${escapeHtml(run.branchName)}</strong></span>
         <span>Current step<strong>${escapeHtml(getCurrentStep(run)?.label ?? 'Complete')}</strong></span>
       </div>
@@ -2898,11 +2917,15 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
 
   const projectName = deriveProjectName(requestedProjectName, derivedFeatureRequest)
   const repositoryName = slugify(projectName) || 'local-delivery-project'
+  const runGithubOwner = normalizeGithubOwner(githubOwner)
+  const repositoryUrl = buildRepositoryUrl(runGithubOwner, repositoryName)
   const slug = slugify(derivedFeatureRequest) || 'new-local-work-item'
   const run: OrchestratorRun = {
     id: createId(),
     projectName,
     repositoryName,
+    githubOwner: runGithubOwner,
+    repositoryUrl,
     featureRequest: derivedFeatureRequest,
     requirements: {
       status: 'clarifying',
@@ -2932,7 +2955,7 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
       ),
       makeLogEntry(
         'DevOps agent',
-        `Prepared GitHub repository plan ${repositoryName} with environment branches dev, stage, and prod. Feature work starts from dev.`,
+        `Prepared GitHub repository target ${repositoryUrl} with environment branches dev, stage, and prod. Feature work starts from dev.`,
         'success',
       ),
       ...(contextFiles.length > 0
