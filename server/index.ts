@@ -13,8 +13,13 @@ import {
   ENVIRONMENT_BRANCHES,
   WORKFLOW,
   slugify,
+  type AgentContextPack,
   type AgentArtifact,
   type DeploymentAccessBlocker,
+  type ContextSummary,
+  type DecisionModelTier,
+  type DecisionSource,
+  type DecisionTraceEntry,
   type EnvironmentBranch,
   type AgentMemory,
   type AgentName,
@@ -60,6 +65,9 @@ type OrchestratorRun = {
   artifacts: AgentArtifact[]
   peerReviews: PeerReview[]
   contextFiles: UploadedContextFile[]
+  contextSummary: ContextSummary
+  contextPacks: AgentContextPack[]
+  decisionTrace: DecisionTraceEntry[]
   accessBlockers: DeploymentAccessBlocker[]
   pendingLlmCall?: PendingLlmCall
 }
@@ -176,6 +184,17 @@ const getAgentLlmRoute = (agentName: AgentName): LlmRoute => {
     paid: false,
     client: null,
   }
+}
+
+const getDecisionModelTierForAgents = (
+  agentNames: AgentName[],
+  forceMock = false,
+): DecisionModelTier => {
+  if (forceMock) return 'deterministic'
+  const routes = agentNames.map((agentName) => getAgentLlmRoute(agentName))
+  if (routes.some((route) => route.provider === 'openai')) return 'strong'
+  if (routes.some((route) => route.provider === 'local')) return 'cheap'
+  return 'deterministic'
 }
 
 const modelPricingUsdPerMillion: Record<string, { input: number; output: number }> = {
@@ -608,6 +627,7 @@ const setPendingLlmCall = (run: OrchestratorRun, pendingLlmCall: PendingLlmCall)
     `${pendingLlmCall.title} is waiting for approval. Estimated cost: $${pendingLlmCall.estimatedTotalCostUsd.toFixed(6)}.`,
     'warning',
   )
+  refreshContextEngine(run, 'Orchestrator')
 }
 
 type BaRequirementDecision = {
@@ -806,6 +826,9 @@ const buildBaRequirementInput = (run: OrchestratorRun) => {
 
   return [
     `Feature request: ${run.featureRequest}`,
+    '',
+    getAgentContextPrompt(run, 'Business analyst agent'),
+    '',
     currentBaseline
       ? `Current baseline requirements document:\n${currentBaseline.output}`
       : 'Current baseline requirements document: none yet.',
@@ -968,6 +991,29 @@ const continueBaRequirements = async (
       const peerReviews = createPeerReviews(run, WORKFLOW[0], [artifact])
       run.peerReviews = [...run.peerReviews, ...peerReviews].slice(-120)
       updateAgentMemoryFromStep(run, WORKFLOW[0], [artifact], peerReviews)
+      recordDecisionTrace(run, {
+        type: 'requirement',
+        title: artifact.title,
+        summary: hadBaseline
+          ? 'BA revised the baseline requirements document from the active scope chat.'
+          : 'BA completed the baseline requirements document for downstream design and delivery work.',
+        rationale:
+          'Developer agents should not start until the baseline captures business outcome, scope, workflows, data, rules, acceptance criteria, risks, and deployment constraints.',
+        evidenceRefs: [
+          artifact.title,
+          'requirement-transcript',
+          ...run.contextFiles.map((file) => file.name),
+        ],
+        source: 'Business analyst agent',
+        modelTier: getDecisionModelTierForAgents(['Business analyst agent'], options.forceMock),
+        gate: hadBaseline ? 'scope revision' : 'baseline completion',
+      })
+      recordGateValidation(
+        run,
+        hadBaseline ? 'scope revision' : 'baseline completion',
+        'Business analyst agent',
+        getDecisionModelTierForAgents(['Business analyst agent'], options.forceMock),
+      )
       if (!hadBaseline && run.currentStepIndex < 1) {
         run.currentStepIndex = 1
         run.isRunning = true
@@ -986,6 +1032,7 @@ const continueBaRequirements = async (
         `${peerReviews.length} baseline checks completed before developer handoff.`,
         'success',
       )
+      refreshContextEngine(run, 'Orchestrator')
       if (run.isRunning) scheduleRun(run.id)
       return
     }
@@ -994,6 +1041,17 @@ const continueBaRequirements = async (
       decision.question ??
       'What acceptance criteria should determine whether this feature is ready for handoff?'
     run.requirements.messages.push(makeRequirementMessage('ba', question))
+    recordDecisionTrace(run, {
+      type: 'requirement',
+      title: 'BA clarification question',
+      summary: question,
+      rationale:
+        'The baseline is not ready until material ambiguity is answered and captured as explicit requirement context.',
+      evidenceRefs: ['requirement-transcript', 'context-summary'],
+      source: 'Business analyst agent',
+      modelTier: getDecisionModelTierForAgents(['Business analyst agent'], options.forceMock),
+      gate: 'requirements clarification',
+    })
     appendLog(run, 'Business analyst agent', 'Clarifying question sent to the user.')
   } catch (error) {
     const hadBaseline = Boolean(run.requirements.baselineArtifactId)
@@ -1013,6 +1071,25 @@ const continueBaRequirements = async (
       const peerReviews = createPeerReviews(run, WORKFLOW[0], [artifact])
       run.peerReviews = [...run.peerReviews, ...peerReviews].slice(-120)
       updateAgentMemoryFromStep(run, WORKFLOW[0], [artifact], peerReviews)
+      recordDecisionTrace(run, {
+        type: 'requirement',
+        title: artifact.title,
+        summary: hadBaseline
+          ? 'Mock BA fallback revised the baseline requirements document.'
+          : 'Mock BA fallback created the baseline requirements document.',
+        rationale:
+          'The local workflow remains testable without making an unapproved paid LLM call.',
+        evidenceRefs: [artifact.title, 'requirement-transcript'],
+        source: 'Business analyst agent',
+        modelTier: 'deterministic',
+        gate: hadBaseline ? 'scope revision fallback' : 'baseline fallback',
+      })
+      recordGateValidation(
+        run,
+        hadBaseline ? 'scope revision fallback' : 'baseline fallback',
+        'Business analyst agent',
+        'deterministic',
+      )
       if (!hadBaseline && run.currentStepIndex < 1) {
         run.currentStepIndex = 1
         run.isRunning = true
@@ -1031,6 +1108,7 @@ const continueBaRequirements = async (
         `${peerReviews.length} baseline checks completed before developer handoff.`,
         'success',
       )
+      refreshContextEngine(run, 'Orchestrator')
       if (run.isRunning) scheduleRun(run.id)
       return
     }
@@ -1042,6 +1120,19 @@ const continueBaRequirements = async (
           'What is the most important user workflow this first version must support?',
       ),
     )
+    recordDecisionTrace(run, {
+      type: 'requirement',
+      title: 'Mock BA clarification question',
+      summary:
+        fallback.question ??
+        'What is the most important user workflow this first version must support?',
+      rationale:
+        'BA clarification fell back to deterministic local mode to preserve progress without spending API budget.',
+      evidenceRefs: ['requirement-transcript'],
+      source: 'Business analyst agent',
+      modelTier: 'deterministic',
+      gate: 'requirements clarification fallback',
+    })
     appendLog(
       run,
       'LLM provider',
@@ -1159,7 +1250,327 @@ const ensureDeploymentAccess = (
     `${environment} deployment is blocked until scoped AWS/Azure access is verified.`,
     'warning',
   )
+  recordDecisionTrace(run, {
+    type: 'blocker',
+    title: `${environment} deployment access blocker`,
+    summary: blocker.requestedResolution,
+    rationale:
+      'Deployment agents must park when scoped cloud credentials or permissions are missing, then resume only after human setup and verification.',
+    evidenceRefs: [blocker.resource, ...blocker.missingAccess],
+    source: 'DevOps agent',
+    modelTier: 'deterministic',
+    gate: `${environment} deployment`,
+  })
   return blocker
+}
+
+const listItems = (items: string[], fallback: string, limit = 6) => {
+  const uniqueItems = [
+    ...new Set(items.map((item) => normalizeText(item)).filter(Boolean)),
+  ]
+  return uniqueItems.length > 0 ? uniqueItems.slice(0, limit) : [fallback]
+}
+
+const createInitialContextSummary = (featureRequest: string): ContextSummary => ({
+  id: createId(),
+  version: 0,
+  sourceOfTruth: 'feature-request',
+  summary: firstSentence(featureRequest) || 'No feature request has been captured yet.',
+  requirementDigest: listItems(
+    [featureRequest],
+    'Requirement intake has not started yet.',
+    3,
+  ),
+  uploadedContextDigest: ['No uploaded context files attached.'],
+  assumptions: ['The baseline requirements document becomes the source of truth after BA completion.'],
+  openQuestions: ['BA clarification loop has not started yet.'],
+  decisions: ['No decisions have been recorded yet.'],
+  risks: ['No delivery risks have been recorded yet.'],
+  blockers: ['No blockers are currently open.'],
+  approvals: ['No human approvals have been recorded yet.'],
+  tokenBudgetHint: 'Use the compact context pack before full artifacts. Escalate to full baseline only when a gate decision needs it.',
+  updatedBy: 'Context engine',
+  updatedAt: new Date().toISOString(),
+})
+
+const getContextSourceOfTruth = (run: OrchestratorRun) =>
+  getBaselineArtifact(run)?.title ?? 'feature-request'
+
+const getRequirementDigest = (run: OrchestratorRun) => {
+  const baseline = getBaselineArtifact(run)
+  const recentUserMessages = run.requirements.messages
+    .filter((message) => message.role === 'user')
+    .slice(-4)
+    .map((message) => firstSentence(message.content))
+
+  return listItems(
+    [
+      `Feature request: ${run.featureRequest}`,
+      baseline ? `Baseline: ${baseline.summary}` : '',
+      ...recentUserMessages.map((message) => `User input: ${message}`),
+    ],
+    'No requirement context captured yet.',
+    7,
+  )
+}
+
+const getUploadedContextDigest = (run: OrchestratorRun) =>
+  listItems(
+    run.contextFiles.map((file) =>
+      [
+        `${file.name} (${file.kind})`,
+        file.summary,
+        file.columns?.length ? `Columns: ${file.columns.slice(0, 8).join(', ')}` : '',
+        typeof file.rowCount === 'number' ? `${file.rowCount} rows` : '',
+      ]
+        .filter(Boolean)
+        .join(' - '),
+    ),
+    'No uploaded context files attached.',
+    6,
+  )
+
+const getOpenRequirementQuestions = (run: OrchestratorRun) =>
+  run.requirements.status === 'clarifying'
+    ? listItems(
+        run.requirements.messages
+          .filter((message) => message.role === 'ba')
+          .slice(-3)
+          .map((message) => message.content),
+        'BA is waiting for the next clarification answer.',
+        3,
+      )
+    : ['No BA clarification questions are currently open.']
+
+const getContextAssumptions = (run: OrchestratorRun) =>
+  listItems(
+    [
+      'Developer work starts only after requirements and design/story handoffs are finalized.',
+      'Feature work starts from the dev branch and promotes dev -> stage -> prod.',
+      'GitHub, CI, and cloud deployment actions are local orchestration output until adapters are connected.',
+      run.contextFiles.length > 0
+        ? 'Uploaded files are summarized into context packs; binaries are not persisted.'
+        : '',
+    ],
+    'No assumptions captured yet.',
+    5,
+  )
+
+const getContextRisks = (run: OrchestratorRun) =>
+  listItems(
+    [
+      ...run.peerReviews
+        .filter((review) => review.status !== 'approved')
+        .slice(-6)
+        .map(
+          (review) =>
+            `${review.stepLabel}: ${review.reviewerAgent.replace(' agent', '')} flagged ${review.status} for ${review.targetAgent.replace(' agent', '')}. ${review.recommendation}`,
+        ),
+      ...run.accessBlockers
+        .filter((blocker) => blocker.status === 'open')
+        .map((blocker) => `${blocker.environment} deployment blocked: ${blocker.requestedResolution}`),
+      run.requirements.status === 'clarifying'
+        ? 'Requirements are not baseline-complete yet; developer work must stay blocked.'
+        : '',
+    ],
+    'No active risks have been recorded.',
+    8,
+  )
+
+const getContextBlockers = (run: OrchestratorRun) => {
+  const flags = getRunFlags(run)
+  return listItems(
+    [
+      flags.waitingForLlmApproval ? 'Paid LLM call is waiting for explicit approval.' : '',
+      flags.waitingForRequirements ? 'BA clarification is waiting on user input.' : '',
+      flags.waitingForMerge ? 'Human must manually merge the pull request into dev.' : '',
+      flags.waitingForProd ? 'Human must approve production deployment.' : '',
+      ...run.accessBlockers
+        .filter((blocker) => blocker.status === 'open')
+        .map((blocker) => `${blocker.environment}: ${blocker.missingAccess.join('; ')}`),
+    ],
+    'No blockers are currently open.',
+    8,
+  )
+}
+
+const getContextApprovals = (run: OrchestratorRun) =>
+  listItems(
+    [
+      run.mergeApproved ? 'Pull request merge was confirmed by a human reviewer.' : '',
+      run.prodApproved ? 'Production deployment was approved by a human approver.' : '',
+      ...run.decisionTrace
+        .filter((entry) => entry.type === 'approval')
+        .slice(-4)
+        .map((entry) => entry.summary),
+    ],
+    'No human approvals have been recorded yet.',
+    5,
+  )
+
+const getContextDecisions = (run: OrchestratorRun) =>
+  listItems(
+    run.decisionTrace
+      .filter((entry) => entry.type !== 'context-summary')
+      .slice(-8)
+      .map((entry) => `${entry.title}: ${entry.summary}`),
+    'No decisions have been recorded yet.',
+    8,
+  )
+
+const getContextSummaryText = (run: OrchestratorRun) => {
+  const baseline = getBaselineArtifact(run)
+  const step = WORKFLOW[run.currentStepIndex]
+  return [
+    baseline
+      ? `${baseline.title} is the active source of truth for ${run.projectName}.`
+      : `${run.projectName} is still in requirement discovery for: ${firstSentence(run.featureRequest)}.`,
+    step ? `Current workflow step: ${step.label}.` : 'Workflow is complete.',
+    `${run.artifacts.length} artifacts, ${run.peerReviews.length} peer reviews, and ${run.decisionTrace.length} decision trace entries are available.`,
+  ].join(' ')
+}
+
+const buildAgentContextPack = (
+  run: OrchestratorRun,
+  agentName: AgentName,
+  summary: ContextSummary,
+): AgentContextPack => {
+  const agent = getAgentDefinition(agentName)
+  const step = WORKFLOW[run.currentStepIndex]
+  const isAssignedNow = Boolean(step?.agents.includes(agentName))
+  const memory = getAgentMemory(agentName)
+
+  return {
+    agentName,
+    sourceOfTruth: summary.sourceOfTruth,
+    summary: summary.summary,
+    focus: isAssignedNow
+      ? `Current assignment: ${step?.label ?? 'Workflow complete'} - ${step?.detail ?? 'No active step.'}`
+      : agent.mission,
+    relevantDecisions: listItems(
+      run.decisionTrace
+    .filter(
+      (entry) =>
+        entry.source === agentName ||
+        entry.summary.includes(agent.shortName) ||
+        entry.summary.includes(agentName.replace(' agent', '')),
+    )
+    .slice(-5)
+    .map((entry) => `${entry.title}: ${entry.summary}`),
+      summary.decisions[0] ?? 'No agent-specific decisions recorded yet.',
+      5,
+    ),
+    relevantRisks: summary.risks,
+    blockers: summary.blockers,
+    sourceRefs: listItems(
+      [
+        summary.sourceOfTruth,
+        ...run.contextFiles.map((file) => file.name),
+        ...run.artifacts.slice(-4).map((artifact) => artifact.title),
+      ],
+      'feature-request',
+      8,
+    ),
+    memory: memory.learnedPatterns.slice(0, 4),
+    updatedAt: summary.updatedAt,
+  }
+}
+
+const refreshContextEngine = (
+  run: OrchestratorRun,
+  updatedBy: DecisionSource = 'Context engine',
+) => {
+  const previousVersion = run.contextSummary?.version ?? 0
+  const summary: ContextSummary = {
+    id: run.contextSummary?.id ?? createId(),
+    version: previousVersion + 1,
+    sourceOfTruth: getContextSourceOfTruth(run),
+    summary: getContextSummaryText(run),
+    requirementDigest: getRequirementDigest(run),
+    uploadedContextDigest: getUploadedContextDigest(run),
+    assumptions: getContextAssumptions(run),
+    openQuestions: getOpenRequirementQuestions(run),
+    decisions: getContextDecisions(run),
+    risks: getContextRisks(run),
+    blockers: getContextBlockers(run),
+    approvals: getContextApprovals(run),
+    tokenBudgetHint: 'Prompts should use this compact pack first, then pull full baseline/artifacts only when detail is needed for a gate or handoff.',
+    updatedBy,
+    updatedAt: new Date().toISOString(),
+  }
+  run.contextSummary = summary
+  run.contextPacks = AGENTS.map((agent) =>
+    buildAgentContextPack(run, agent.name, summary),
+  )
+  run.updatedAt = summary.updatedAt
+}
+
+const recordDecisionTrace = (
+  run: OrchestratorRun,
+  entry: Omit<DecisionTraceEntry, 'id' | 'createdAt'>,
+) => {
+  const decision: DecisionTraceEntry = {
+    id: createId(),
+    createdAt: new Date().toISOString(),
+    ...entry,
+  }
+  run.decisionTrace = [...run.decisionTrace, decision].slice(-120)
+  refreshContextEngine(run, entry.source)
+  return decision
+}
+
+const recordGateValidation = (
+  run: OrchestratorRun,
+  gate: string,
+  source: DecisionSource,
+  modelTier: DecisionModelTier = 'strong',
+) =>
+  recordDecisionTrace(run, {
+    type: 'gate-validation',
+    title: `${gate} validation`,
+    summary: `${source} validated the compact context pack against the current source of truth before this gate moved forward.`,
+    rationale:
+      'Judgment-heavy gates must be checked by the responsible specialist before downstream agents rely on compressed context.',
+    evidenceRefs: [
+      getContextSourceOfTruth(run),
+      'context-summary',
+      'recent-peer-reviews',
+      'open-blockers',
+    ],
+    source,
+    modelTier,
+    gate,
+  })
+
+const getAgentContextPrompt = (run: OrchestratorRun, agentName: AgentName) => {
+  const pack =
+    run.contextPacks.find((contextPack) => contextPack.agentName === agentName) ??
+    buildAgentContextPack(
+      run,
+      agentName,
+      run.contextSummary ?? createInitialContextSummary(run.featureRequest),
+    )
+
+  return [
+    'Context Engine Pack:',
+    `Source of truth: ${pack.sourceOfTruth}`,
+    `Summary: ${pack.summary}`,
+    `Focus: ${pack.focus}`,
+    'Requirement digest:',
+    ...run.contextSummary.requirementDigest.map((item) => `- ${item}`),
+    'Relevant decisions:',
+    ...pack.relevantDecisions.map((item) => `- ${item}`),
+    'Risks and blockers:',
+    ...[...pack.relevantRisks, ...pack.blockers].slice(0, 8).map((item) => `- ${item}`),
+    'Open questions:',
+    ...run.contextSummary.openQuestions.map((item) => `- ${item}`),
+    'Source refs:',
+    ...pack.sourceRefs.map((item) => `- ${item}`),
+    'Memory:',
+    ...pack.memory.map((item) => `- ${item}`),
+    '',
+    'Do not expose hidden chain-of-thought. Use concise rationale, evidence, assumptions, risks, and decisions instead.',
+  ].join('\n')
 }
 
 type PurposeGuardrailResult =
@@ -1310,6 +1721,9 @@ const buildAgentInput = (
     `Assigned persona: ${agentName}`,
     `Specialization: ${agent.specialization}`,
     `Review responsibility: ${agent.reviewLens}`,
+    '',
+    getAgentContextPrompt(run, agentName),
+    '',
     step.id === 'design-and-stories'
       ? 'Parallel gate: the Architect agent produces the solution design while the Business analyst agent produces user stories. Developer handoff must not start until both outputs are complete.'
       : '',
@@ -1323,6 +1737,9 @@ const buildAgentInput = (
             ? `Active access blocker: ${activeAccessBlocker.environment} ${activeAccessBlocker.action}. Missing access: ${activeAccessBlocker.missingAccess.join('; ')}`
             : 'Active access blocker: none.',
         ].join('\n')
+      : '',
+    ['developer-handoff', 'pull-request', 'deploy-prod'].includes(step.id)
+      ? 'Gate validation rule: validate the compact context pack against the baseline, decision trace, peer reviews, risks, and blockers before producing this handoff. Return concise rationale and evidence, not hidden reasoning.'
       : '',
     '',
     getBaselineContextFile(run),
@@ -1725,6 +2142,37 @@ const completeActiveStep = async (
     const peerReviews = createPeerReviews(run, step, newArtifacts)
     run.peerReviews = [...run.peerReviews, ...peerReviews].slice(-120)
     updateAgentMemoryFromStep(run, step, newArtifacts, peerReviews)
+    const stepModelTier = getDecisionModelTierForAgents(step.agents, options.forceMock)
+    recordDecisionTrace(run, {
+      type: 'handoff',
+      title: `${step.label} handoff completed`,
+      summary: `${step.agents.join(' + ')} produced ${newArtifacts.length} handoff artifact${newArtifacts.length === 1 ? '' : 's'} for ${step.environment}.`,
+      rationale:
+        'Each completed step becomes structured evidence for downstream agents and gate validation.',
+      evidenceRefs: newArtifacts.map((artifact) => artifact.title),
+      source: step.agents[0] ?? 'Orchestrator',
+      modelTier: stepModelTier,
+      gate: step.label,
+    })
+    recordDecisionTrace(run, {
+      type: 'peer-review',
+      title: `${step.label} peer review`,
+      summary: `${peerReviews.length} cross-agent checks were recorded for ${step.label}.`,
+      rationale:
+        'Peer reviews convert specialist critiques into auditable risks, watch items, and local memory updates.',
+      evidenceRefs: peerReviews.slice(0, 8).map((review) => review.recommendation),
+      source: 'Context engine',
+      modelTier: 'deterministic',
+      gate: step.label,
+    })
+    if (['design-and-stories', 'developer-handoff', 'pull-request', 'deploy-prod'].includes(step.id)) {
+      recordGateValidation(
+        run,
+        step.label,
+        step.agents[0] ?? 'Orchestrator',
+        stepModelTier,
+      )
+    }
     appendLog(
       run,
       'Team review',
@@ -1741,10 +2189,12 @@ const completeActiveStep = async (
 
     run.currentStepIndex += 1
     run.updatedAt = new Date().toISOString()
+    refreshContextEngine(run, 'Orchestrator')
     const nextFlags = getRunFlags(run)
 
     if (nextFlags.isComplete) {
       run.isRunning = false
+      recordGateValidation(run, 'release completion', 'Orchestrator', 'deterministic')
       appendLog(run, 'Orchestrator', 'Release completed through production.', 'success')
       return
     }
@@ -1894,6 +2344,9 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
     artifacts: [],
     peerReviews: [],
     contextFiles,
+    contextSummary: createInitialContextSummary(derivedFeatureRequest),
+    contextPacks: [],
+    decisionTrace: [],
     accessBlockers: [],
     logEntries: [
       makeLogEntry('User request', derivedFeatureRequest),
@@ -1921,6 +2374,17 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
 
   runs.set(run.id, run)
   activeRunId = run.id
+  recordDecisionTrace(run, {
+    type: 'requirement',
+    title: 'Feature intake opened',
+    summary: firstSentence(derivedFeatureRequest),
+    rationale:
+      'The user-provided feature request starts the auditable context trail and seeds the first compact context pack.',
+    evidenceRefs: ['feature-request', ...contextFiles.map((file) => file.name)],
+    source: 'Orchestrator',
+    modelTier: 'deterministic',
+    gate: 'intake',
+  })
   await continueBaRequirements(run)
 
   response.status(201).json({ run: serializeRun(run) })
@@ -1959,6 +2423,19 @@ app.post('/api/runs/:runId/requirements/messages', async (request, response) => 
       ? 'Requirement scope change submitted.'
       : 'Requirement clarification answered.',
   )
+  recordDecisionTrace(run, {
+    type: 'requirement',
+    title: run.requirements.baselineArtifactId
+      ? 'Requirement scope change submitted'
+      : 'Requirement clarification answered',
+    summary: firstSentence(message),
+    rationale:
+      'User requirement input must be preserved as evidence before BA summarizes or revises the baseline.',
+    evidenceRefs: ['requirement-transcript'],
+    source: 'Human',
+    modelTier: 'human',
+    gate: run.requirements.baselineArtifactId ? 'scope revision' : 'requirements clarification',
+  })
   await continueBaRequirements(run)
 
   response.json({ run: serializeRun(run) })
@@ -1983,6 +2460,17 @@ app.post('/api/runs/:runId/llm/approve', async (request, response) => {
     `Approved ${pending.title}. Estimated cost: $${pending.estimatedTotalCostUsd.toFixed(6)}.`,
     'success',
   )
+  recordDecisionTrace(run, {
+    type: 'approval',
+    title: `Approved ${pending.title}`,
+    summary: `Human approved paid ${pending.model} call with estimated cost $${pending.estimatedTotalCostUsd.toFixed(6)}.`,
+    rationale:
+      'Paid model usage requires explicit human approval before the orchestrator can continue.',
+    evidenceRefs: [pending.model, `${pending.estimatedInputTokens} estimated input tokens`],
+    source: 'Human',
+    modelTier: 'human',
+    gate: pending.kind,
+  })
 
   if (pending.kind === 'ba-requirements') {
     await continueBaRequirements(run, { approved: true })
@@ -2009,6 +2497,17 @@ app.post('/api/runs/:runId/llm/mock', async (request, response) => {
   }
 
   appendLog(run, 'User', `Chose mock output for ${pending.title}.`, 'success')
+  recordDecisionTrace(run, {
+    type: 'approval',
+    title: `Mock selected for ${pending.title}`,
+    summary: 'Human chose deterministic mock output instead of spending budget on the pending paid LLM call.',
+    rationale:
+      'Mock selection preserves local testability and keeps the run cost at zero for this step.',
+    evidenceRefs: [pending.model, pending.kind],
+    source: 'Human',
+    modelTier: 'human',
+    gate: pending.kind,
+  })
 
   if (pending.kind === 'ba-requirements') {
     await continueBaRequirements(run, { forceMock: true })
@@ -2086,6 +2585,17 @@ app.post('/api/runs/:runId/access/verify', (request, response) => {
     `${blocker.environment} access blocker resolved. Deployment workflow resumed.`,
     'success',
   )
+  recordDecisionTrace(run, {
+    type: 'blocker',
+    title: `${blocker.environment} access blocker resolved`,
+    summary: evidence,
+    rationale:
+      'DevOps resumes only after human-provided scoped access is verified or recorded in local mode.',
+    evidenceRefs: [blocker.resource, blocker.resolutionNote ?? 'local verification'],
+    source: 'DevOps agent',
+    modelTier: 'deterministic',
+    gate: `${blocker.environment} deployment`,
+  })
   scheduleRun(run.id)
 
   response.json({ run: serializeRun(run) })
@@ -2117,6 +2627,17 @@ app.post('/api/runs/:runId/access/still-blocked', (request, response) => {
     `${blocker.environment} deployment remains blocked on AWS/Azure access.`,
     'warning',
   )
+  recordDecisionTrace(run, {
+    type: 'blocker',
+    title: `${blocker.environment} access still blocked`,
+    summary: blocker.evidence,
+    rationale:
+      'The orchestrator must remain parked until the missing scoped cloud permissions are resolved.',
+    evidenceRefs: [blocker.resource, ...blocker.missingAccess],
+    source: 'DevOps agent',
+    modelTier: 'deterministic',
+    gate: `${blocker.environment} deployment`,
+  })
 
   response.json({ run: serializeRun(run) })
 })
@@ -2153,6 +2674,18 @@ app.post('/api/runs/:runId/approvals/:gate', (request, response) => {
     run.mergeApproved = true
     run.currentStepIndex += 1
     run.isRunning = true
+    recordDecisionTrace(run, {
+      type: 'approval',
+      title: 'Pull request manually merged',
+      summary: 'Human reviewer confirmed the pull request was manually merged into dev.',
+      rationale:
+        'Deployment cannot begin until a human completes the repository merge gate.',
+      evidenceRefs: ['human-merge', 'dev branch'],
+      source: 'Human',
+      modelTier: 'human',
+      gate: 'merge',
+    })
+    recordGateValidation(run, 'manual merge', 'Human', 'human')
     appendLog(run, 'Human reviewer', 'Pull request manually merged into dev.', 'success')
     scheduleRun(run.id)
     response.json({ run: serializeRun(run) })
@@ -2163,6 +2696,18 @@ app.post('/api/runs/:runId/approvals/:gate', (request, response) => {
     run.prodApproved = true
     run.currentStepIndex += 1
     run.isRunning = true
+    recordDecisionTrace(run, {
+      type: 'approval',
+      title: 'Production deployment approved',
+      summary: 'Human approver approved the production release gate.',
+      rationale:
+        'Production deployment requires human approval after stage validation and before prod execution.',
+      evidenceRefs: ['prod-approval', 'stage validation'],
+      source: 'Human',
+      modelTier: 'human',
+      gate: 'prod',
+    })
+    recordGateValidation(run, 'production approval', 'Human', 'human')
     appendLog(run, 'Human approver', 'Production release approved.', 'success')
     scheduleRun(run.id)
     response.json({ run: serializeRun(run) })

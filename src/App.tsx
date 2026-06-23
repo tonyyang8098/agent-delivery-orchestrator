@@ -36,8 +36,11 @@ import {
   ENVIRONMENT_BRANCHES,
   WORKFLOW,
   slugify,
+  type AgentContextPack,
   type AgentArtifact,
   type AgentMemory,
+  type ContextSummary,
+  type DecisionTraceEntry,
   type DeploymentAccessBlocker,
   type EnvironmentBranch,
   type AgentName,
@@ -92,6 +95,9 @@ type OrchestratorRun = {
   peerReviews: PeerReview[]
   accessBlockers: DeploymentAccessBlocker[]
   activeAccessBlocker?: DeploymentAccessBlocker
+  contextSummary: ContextSummary
+  contextPacks: AgentContextPack[]
+  decisionTrace: DecisionTraceEntry[]
   agentMemory: AgentMemory[]
   contextFiles: UploadedContextFile[]
   llmProvider: LlmProviderStatus
@@ -260,6 +266,9 @@ function App() {
   const artifacts = run?.artifacts ?? []
   const peerReviews = run?.peerReviews ?? []
   const contextFiles = run?.contextFiles ?? []
+  const contextSummary = run?.contextSummary
+  const contextPacks = run?.contextPacks ?? []
+  const decisionTrace = run?.decisionTrace ?? []
   const environmentBranches = run?.environmentBranches ?? ENVIRONMENT_BRANCHES
   const pendingLlmCall = run?.pendingLlmCall
   const activeAccessBlocker = run?.activeAccessBlocker
@@ -508,6 +517,10 @@ function App() {
     agentMemory.find((memory) => memory.agentName === agentName)
 
   const latestPeerReviews = peerReviews.slice(-6).reverse()
+  const latestDecisionTrace = decisionTrace.slice(-6).reverse()
+  const activeContextPacks = contextPacks.filter((pack) =>
+    currentStep?.agents.includes(pack.agentName),
+  )
 
   const environmentStatus = (stepId: string, envName: string) => {
     const deployIndex = WORKFLOW.findIndex((step) => step.id === stepId)
@@ -1221,6 +1234,85 @@ function App() {
                 </div>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="context-engine-panel">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">Context engine</p>
+              <h2>
+                <FileCheck2 size={20} />
+                Decision trace
+              </h2>
+            </div>
+            <span className="status-pill">
+              v{contextSummary?.version ?? 0}
+            </span>
+          </div>
+
+          <div className="context-engine-layout">
+            <article className="context-summary-card">
+              <div className="review-meta">
+                <span>Source of truth</span>
+                <strong>{contextSummary?.sourceOfTruth ?? 'feature request'}</strong>
+              </div>
+              <h3>{contextSummary?.summary ?? 'Context pack will appear after a run starts.'}</h3>
+              <div className="context-chip-list">
+                {(contextSummary?.requirementDigest ?? ['No requirement digest yet.'])
+                  .slice(0, 4)
+                  .map((item) => (
+                    <span key={item}>{item}</span>
+                  ))}
+              </div>
+            </article>
+
+            <div className="context-lists">
+              <article>
+                <h3>Risks and blockers</h3>
+                {(contextSummary?.risks ?? ['No risks recorded yet.'])
+                  .slice(0, 3)
+                  .map((item) => (
+                    <p key={item}>{item}</p>
+                  ))}
+                {(contextSummary?.blockers ?? [])
+                  .filter((item) => !item.toLowerCase().includes('no blockers'))
+                  .slice(0, 2)
+                  .map((item) => (
+                    <p key={item}>{item}</p>
+                  ))}
+              </article>
+
+              <article>
+                <h3>Active packs</h3>
+                {(activeContextPacks.length > 0 ? activeContextPacks : contextPacks.slice(0, 2)).map((pack) => (
+                  <p key={pack.agentName}>
+                    <strong>{pack.agentName.replace(' agent', '')}:</strong> {pack.focus}
+                  </p>
+                ))}
+                {contextPacks.length === 0 ? <p>No agent context packs yet.</p> : null}
+              </article>
+            </div>
+
+            <div className="decision-trace-list">
+              {latestDecisionTrace.length === 0 ? (
+                <article className="trace-empty">
+                  Decision trace entries appear as requirements, handoffs, reviews, blockers, and approvals are recorded.
+                </article>
+              ) : (
+                latestDecisionTrace.map((entry) => (
+                  <article className={`trace-row ${entry.type}`} key={entry.id}>
+                    <div className="review-meta">
+                      <span>{entry.type.replace('-', ' ')}</span>
+                      <strong>{entry.modelTier}</strong>
+                    </div>
+                    <h3>{entry.title}</h3>
+                    <p>{entry.summary}</p>
+                    <p>{entry.rationale}</p>
+                  </article>
+                ))
+              )}
+            </div>
           </div>
         </section>
 

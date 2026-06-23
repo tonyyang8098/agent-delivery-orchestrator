@@ -86,6 +86,17 @@ When the BA creates or revises the baseline, the other agents review it before d
 
 The backend also keeps local agent memory in `local-state/agent-memory.json`. This file is ignored by Git so the agents can learn from local runs without uploading runtime memory to GitHub. Memory is used in future prompts and visible in the UI as handoff counts, review counts, and the latest learned pattern for each specialist.
 
+## Context Engine And Decision Trace
+
+The orchestrator keeps a structured context pipeline instead of storing or exposing hidden chain-of-thought:
+
+- Compact context summary: requirements, uploaded context, assumptions, decisions, risks, blockers, approvals, and source of truth.
+- Per-agent context packs: each persona receives a focused packet with relevant decisions, risks, blockers, source refs, and memory.
+- Decision trace: auditable records for requirement intake, BA clarification, baseline completion, handoffs, peer reviews, blockers, LLM spend choices, and human approvals.
+- Gate validation: important gates record explicit validation entries before downstream work continues.
+
+The current implementation is deterministic and local. It does not spend LLM budget. A later upgrade can route summarization to a cheap local model while keeping stronger model validation at important gates.
+
 ## LLM Persona Setup
 
 The backend owns all LLM calls. The browser never receives the API key.

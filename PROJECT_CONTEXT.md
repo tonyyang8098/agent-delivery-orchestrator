@@ -123,6 +123,18 @@ The backend also writes lightweight local memory to `local-state/agent-memory.js
 
 This is not model training or fine-tuning. The model itself does not permanently change. Improvement happens through local memory being added to future prompt context.
 
+## Context Engine And Decision Trace
+
+The app now keeps structured context instead of raw hidden chain-of-thought.
+
+- Context summary: compact source-of-truth digest with requirements, uploaded files, assumptions, decisions, risks, blockers, approvals, and token-budget guidance.
+- Agent context packs: per-agent compact packets containing focus, relevant decisions, risks, blockers, source refs, and agent memory.
+- Decision trace: auditable entries for requirement intake, BA clarification, baseline completion, gate validation, handoffs, peer reviews, blockers, LLM spend choices, and human approvals.
+- Prompt injection: BA and downstream agent prompts receive the compact context pack before full baseline/artifact details.
+- Gate validation: baseline completion, developer handoff, pull request, production approval, and release completion record explicit validation entries.
+
+The current implementation is deterministic and local, so it does not spend LLM budget. The intended future upgrade is to let a cheap/local model compress context, then let the stronger routed model validate summaries only at important gates.
+
 ## LLM And Cost Rules
 
 User preference for this project:

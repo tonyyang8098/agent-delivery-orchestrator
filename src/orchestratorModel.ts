@@ -80,6 +80,63 @@ export type UploadedContextFile = {
   createdAt: string
 }
 
+export type DecisionTraceType =
+  | 'requirement'
+  | 'context-summary'
+  | 'gate-validation'
+  | 'handoff'
+  | 'peer-review'
+  | 'blocker'
+  | 'approval'
+  | 'memory'
+
+export type DecisionModelTier = 'strong' | 'cheap' | 'deterministic' | 'human'
+export type DecisionSource = AgentName | 'Human' | 'Context engine' | 'Orchestrator'
+
+export type DecisionTraceEntry = {
+  id: string
+  type: DecisionTraceType
+  title: string
+  summary: string
+  rationale: string
+  evidenceRefs: string[]
+  source: DecisionSource
+  modelTier: DecisionModelTier
+  gate?: string
+  createdAt: string
+}
+
+export type ContextSummary = {
+  id: string
+  version: number
+  sourceOfTruth: string
+  summary: string
+  requirementDigest: string[]
+  uploadedContextDigest: string[]
+  assumptions: string[]
+  openQuestions: string[]
+  decisions: string[]
+  risks: string[]
+  blockers: string[]
+  approvals: string[]
+  tokenBudgetHint: string
+  updatedBy: DecisionSource
+  updatedAt: string
+}
+
+export type AgentContextPack = {
+  agentName: AgentName
+  sourceOfTruth: string
+  summary: string
+  focus: string
+  relevantDecisions: string[]
+  relevantRisks: string[]
+  blockers: string[]
+  sourceRefs: string[]
+  memory: string[]
+  updatedAt: string
+}
+
 export type DeploymentAccessBlockerStatus = 'open' | 'resolved'
 
 export type DeploymentAccessBlocker = {
