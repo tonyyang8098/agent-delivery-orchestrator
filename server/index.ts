@@ -830,6 +830,125 @@ const firstSentence = (value: string) => {
   return match?.[1] ?? normalized.slice(0, 180)
 }
 
+type PurposeGuardrailResult =
+  | { allowed: true }
+  | { allowed: false; error: string }
+
+const purposeGuardrailMessage =
+  'This orchestrator only accepts software delivery work: feature or tool requests, requirement clarification, scope changes, and supporting requirement or sample data files.'
+
+const deliveryActionPatterns = [
+  /\b(build|create|develop|implement|add|change|modify|update|remove|delete|expand|design|architect|code|test|qa|debug|fix|refactor|migrate|integrate|automate|deploy|release|ship|generate|scaffold|plan|support|include|capture|store|track|route|notify|display|calculate|import|export|upload|manage)\b/i,
+]
+
+const deliveryObjectPatterns = [
+  /\b(feature|tool|app|application|web app|website|api|service|backend|frontend|ui|ux|screen|dashboard|portal|system|workflow|form|report|module|component|endpoint|database|data model|schema|auth|login|role|permission|approval|approver|audit|notification|alert|checklist|onboarding|intake|routing|invoice|customer|admin|user story|requirement|acceptance criteria|csv|excel|spreadsheet|dataset|sample data|dev|stage|prod|environment|pull request|merge|branch|repository|deployment|document|directory|inventory|ticket|task|tracker|management|search|filter|validation|history|status|rule|integration|theme|mode)\b/i,
+]
+
+const unrelatedRequestPatterns = [
+  /\b(tell me a joke|write\s+(?:me\s+)?(?:a\s+)?(?:poem|song|story|essay)|give me a recipe|translate this|summarize this article|do my homework|solve this math|generate trivia)\b/i,
+  /\b(what'?s|what is|show me|give me)\s+(?:the\s+)?(?:weather|forecast|time|date|stock price|sports score|lottery number|horoscope)\b/i,
+  /\b(who\s+(?:is|was|won)|what\s+is\s+the\s+capital|latest news|current news|celebrity gossip|movie recommendation|restaurant recommendation|travel itinerary)\b/i,
+]
+
+const generalQuestionPatterns = [
+  /^(what|who|when|where|why)\b/i,
+  /^how\s+(many|much|old|tall|far|long)\b/i,
+  /^can you\s+(tell|answer|explain)\b/i,
+]
+
+const hasPattern = (patterns: RegExp[], value: string) =>
+  patterns.some((pattern) => pattern.test(value))
+
+const hasDeliveryAction = (value: string) =>
+  hasPattern(deliveryActionPatterns, value)
+
+const hasDeliveryPurpose = (value: string) =>
+  hasDeliveryAction(value) || hasPattern(deliveryObjectPatterns, value)
+
+const isGeneralQuestionOutsideWorkflow = (value: string) =>
+  hasPattern(generalQuestionPatterns, value) && !hasDeliveryAction(value)
+
+const looksLikeClarificationAnswer = (value: string) =>
+  value.length <= 500 && !value.includes('?')
+
+const checkRunPurpose = (
+  featureRequest: string,
+  contextFiles: UploadedContextFile[],
+): PurposeGuardrailResult => {
+  const requirementFiles = contextFiles.filter((file) => file.kind === 'requirements')
+  const evaluationText = normalizeText(
+    [
+      featureRequest,
+      ...requirementFiles.map((file) => `${file.summary}\n${file.extractedText}`),
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  )
+
+  if (!featureRequest && requirementFiles.length === 0) {
+    return {
+      allowed: false,
+      error:
+        'Start with a feature or tool request, or upload a requirement document. Sample data can be attached only as supporting context.',
+    }
+  }
+
+  if (hasPattern(unrelatedRequestPatterns, evaluationText)) {
+    return {
+      allowed: false,
+      error: `${purposeGuardrailMessage} Random questions or general assistant tasks are blocked.`,
+    }
+  }
+
+  if (
+    isGeneralQuestionOutsideWorkflow(evaluationText) ||
+    !hasDeliveryPurpose(evaluationText)
+  ) {
+    return {
+      allowed: false,
+      error:
+        `${purposeGuardrailMessage} Start a run with a software feature, tool, workflow, app, integration, QA, repository, or deployment request.`,
+    }
+  }
+
+  return { allowed: true }
+}
+
+const checkRequirementMessagePurpose = (
+  message: string,
+  run: OrchestratorRun,
+): PurposeGuardrailResult => {
+  const evaluationText = normalizeText(message)
+  const answeringBaQuestion = run.requirements.status === 'clarifying'
+
+  if (hasPattern(unrelatedRequestPatterns, evaluationText)) {
+    return {
+      allowed: false,
+      error: `${purposeGuardrailMessage} The BA chat is limited to this run's requirements and scope.`,
+    }
+  }
+
+  if (isGeneralQuestionOutsideWorkflow(evaluationText)) {
+    return {
+      allowed: false,
+      error:
+        'The BA chat is only for clarifying, adding, modifying, or removing requirements for this software delivery run.',
+    }
+  }
+
+  if (hasDeliveryPurpose(evaluationText)) return { allowed: true }
+  if (answeringBaQuestion && looksLikeClarificationAnswer(evaluationText)) {
+    return { allowed: true }
+  }
+
+  return {
+    allowed: false,
+    error:
+      'Ask the BA to add, modify, delete, or clarify requirements for this run. Unrelated prompts are blocked.',
+  }
+}
+
 const buildAgentInput = (
   run: OrchestratorRun,
   step: WorkflowStep,
@@ -1373,6 +1492,12 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
     return
   }
 
+  const purposeGuardrail = checkRunPurpose(featureRequest, contextFiles)
+  if (!purposeGuardrail.allowed) {
+    response.status(400).json({ error: purposeGuardrail.error })
+    return
+  }
+
   if (activeRunId) clearRunTimer(activeRunId)
 
   const slug = slugify(derivedFeatureRequest) || 'new-local-work-item'
@@ -1430,6 +1555,12 @@ app.post('/api/runs/:runId/requirements/messages', async (request, response) => 
     typeof request.body?.message === 'string' ? request.body.message.trim() : ''
   if (!message) {
     response.status(400).json({ error: 'message is required.' })
+    return
+  }
+
+  const purposeGuardrail = checkRequirementMessagePurpose(message, run)
+  if (!purposeGuardrail.allowed) {
+    response.status(400).json({ error: purposeGuardrail.error })
     return
   }
 

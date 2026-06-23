@@ -314,11 +314,13 @@ function App() {
     if (!run || !requirementAnswer.trim()) return
 
     const message = requirementAnswer.trim()
-    setRequirementAnswer('')
     void mutateRun(() =>
       requestApi<RunResponse>(`/api/runs/${run.id}/requirements/messages`, {
         method: 'POST',
         body: JSON.stringify({ message }),
+      }).then((response) => {
+        setRequirementAnswer('')
+        return response
       }),
     )
   }

@@ -51,6 +51,8 @@ The intake form also accepts context files when starting a run:
 
 Uploads are parsed in memory by the local backend. Requirement documents are converted into extracted text context, and datasets are converted into row/column summaries plus a small preview. The extracted context is included in BA clarification, baseline generation, architecture design, user stories, and downstream handoffs. Uploaded file binaries are not written to disk or committed to Git.
 
+The backend enforces a purpose guardrail before starting a run or accepting BA chat messages. Inputs must be related to software delivery work: feature or tool requests, requirements, scope changes, architecture, implementation, QA, repository operations, or deployment. Random questions and general assistant tasks are rejected before they can enter the agent workflow.
+
 The requirements chat is persisted in the active in-memory run and is exposed through:
 
 ```text
