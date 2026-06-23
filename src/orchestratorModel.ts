@@ -59,6 +59,21 @@ export type LlmProviderStatus = {
   configured: boolean
 }
 
+export type RequirementChatMessage = {
+  id: string
+  role: 'user' | 'ba'
+  content: string
+  createdAt: string
+}
+
+export type RequirementsStatus = 'clarifying' | 'complete'
+
+export type RequirementsState = {
+  status: RequirementsStatus
+  messages: RequirementChatMessage[]
+  baselineArtifactId?: string
+}
+
 export const WORKFLOW: WorkflowStep[] = [
   {
     id: 'intake',

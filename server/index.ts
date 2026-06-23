@@ -12,15 +12,23 @@ import {
   type GateType,
   type LlmProviderStatus,
   type LogEntry,
+  type RequirementChatMessage,
+  type RequirementsState,
   type Tone,
   type WorkflowStep,
 } from '../src/orchestratorModel.ts'
 
-type RunStatus = 'running' | 'paused' | 'waiting-for-human' | 'complete'
+type RunStatus =
+  | 'requirements'
+  | 'running'
+  | 'paused'
+  | 'waiting-for-human'
+  | 'complete'
 
 type OrchestratorRun = {
   id: string
   featureRequest: string
+  requirements: RequirementsState
   branchName: string
   currentStepIndex: number
   mergeApproved: boolean
@@ -46,7 +54,7 @@ let activeRunId: string | null = null
 
 const personaPrompts: Record<AgentName, string> = {
   'Business analyst agent':
-    'You are the Business Analyst agent. Convert user intent into clear scope, acceptance criteria, release notes, and business risk. Be precise and practical.',
+    'You are the Business Analyst agent. You interview the user until requirements are complete, then create a baseline requirements document for developer handoff. Ask one clear question at a time. Be precise and practical.',
   'Software agent':
     'You are the Software agent. Produce implementation notes, code design, branch-ready tasks, and engineering tradeoffs. Be concrete and avoid vague architecture language.',
   'Tester agent':
@@ -80,11 +88,243 @@ const makeLogEntry = (
   tone,
 })
 
+const makeRequirementMessage = (
+  role: RequirementChatMessage['role'],
+  content: string,
+): RequirementChatMessage => ({
+  id: createId(),
+  role,
+  content,
+  createdAt: new Date().toISOString(),
+})
+
 const getLlmProvider = (): LlmProviderStatus => ({
   mode: openaiClient ? 'openai' : 'mock',
   model: openaiClient ? openaiModel : 'mock-local-persona',
   configured: Boolean(openaiClient),
 })
+
+type BaRequirementDecision = {
+  status: 'clarifying' | 'complete'
+  question?: string
+  requirementsDocument?: string
+  summary?: string
+}
+
+const mockQuestions = [
+  'Who are the primary users, and what problem should this solve for them first?',
+  'What are the must-have workflows, inputs, outputs, and approval rules for the first usable version?',
+  'What acceptance criteria, edge cases, integrations, and audit or security requirements should the team treat as non-negotiable?',
+]
+
+const stripJsonFence = (value: string) =>
+  value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+
+const parseBaDecision = (value: string): BaRequirementDecision => {
+  const parsed = JSON.parse(stripJsonFence(value)) as Partial<BaRequirementDecision>
+  if (parsed.status === 'complete' && parsed.requirementsDocument) {
+    return {
+      status: 'complete',
+      requirementsDocument: parsed.requirementsDocument,
+      summary: parsed.summary,
+    }
+  }
+
+  if (parsed.question) {
+    return {
+      status: 'clarifying',
+      question: parsed.question,
+      summary: parsed.summary,
+    }
+  }
+
+  throw new Error('BA response did not include a question or requirements document.')
+}
+
+const buildMockRequirementsDocument = (run: OrchestratorRun) => {
+  const answers = run.requirements.messages
+    .filter((message) => message.role === 'user')
+    .slice(1)
+    .map((message, index) => `${index + 1}. ${message.content}`)
+    .join('\n')
+
+  return [
+    '# Baseline Requirements Document',
+    '',
+    `## Feature`,
+    run.featureRequest,
+    '',
+    '## User And Business Context',
+    answers || 'Captured through the BA clarification chat.',
+    '',
+    '## Functional Scope',
+    '- Convert the clarified request into a first usable implementation plan.',
+    '- Preserve approval, audit, QA, and deployment expectations as project constraints.',
+    '',
+    '## Acceptance Criteria',
+    '- Developer agents can identify the initial feature scope without another discovery pass.',
+    '- Tester agent can derive functional and regression coverage.',
+    '- DevOps agent can identify environment and release-control requirements.',
+    '',
+    '## Handoff Notes',
+    'This baseline came from local mock BA mode. Add OPENAI_API_KEY to generate richer requirements from the model.',
+  ].join('\n')
+}
+
+const createMockBaDecision = (run: OrchestratorRun): BaRequirementDecision => {
+  const userAnswerCount = run.requirements.messages.filter(
+    (message) => message.role === 'user',
+  ).length - 1
+
+  if (userAnswerCount < mockQuestions.length) {
+    return {
+      status: 'clarifying',
+      question: mockQuestions[userAnswerCount],
+    }
+  }
+
+  return {
+    status: 'complete',
+    requirementsDocument: buildMockRequirementsDocument(run),
+    summary: 'Baseline requirements are ready for developer handoff.',
+  }
+}
+
+const buildBaRequirementInput = (run: OrchestratorRun) => {
+  const transcript = run.requirements.messages
+    .map((message) => `${message.role === 'ba' ? 'BA' : 'User'}: ${message.content}`)
+    .join('\n')
+
+  return [
+    `Feature request: ${run.featureRequest}`,
+    '',
+    'Requirement interview transcript:',
+    transcript || 'No transcript yet.',
+    '',
+    'Decide whether requirements are complete enough to hand off to developer agents.',
+    'If any material requirement is missing, return exactly one clarifying question.',
+    'Prioritize these gaps: users/personas, business outcome, scope boundaries, workflows, data, rules, integrations, audit/security, acceptance criteria, edge cases, and deployment constraints.',
+    '',
+    'Return JSON only with one of these shapes:',
+    '{"status":"clarifying","question":"one concise question","summary":"short reason"}',
+    '{"status":"complete","requirementsDocument":"markdown baseline requirements document","summary":"short handoff summary"}',
+  ].join('\n')
+}
+
+const createOpenAIBaDecision = async (
+  run: OrchestratorRun,
+): Promise<BaRequirementDecision> => {
+  if (!openaiClient) return createMockBaDecision(run)
+
+  const userAnswerCount = run.requirements.messages.filter(
+    (message) => message.role === 'user',
+  ).length - 1
+  if (userAnswerCount < 1) {
+    return {
+      status: 'clarifying',
+      question:
+        'What business outcome should this feature deliver, and who are the primary users for the first version?',
+    }
+  }
+
+  const response = await openaiClient.responses.create({
+    model: openaiModel,
+    instructions: personaPrompts['Business analyst agent'],
+    input: buildBaRequirementInput(run),
+  })
+
+  return parseBaDecision(response.output_text)
+}
+
+const createRequirementsArtifact = (
+  requirementsDocument: string,
+  provider: AgentArtifact['provider'],
+): AgentArtifact => ({
+  id: createId(),
+  stepId: 'intake',
+  stepLabel: 'Feature intake',
+  agentName: 'Business analyst agent',
+  title: 'Baseline requirements document',
+  summary: firstSentence(requirementsDocument),
+  output: requirementsDocument,
+  provider,
+  model: provider === 'openai' ? openaiModel : 'mock-local-persona',
+  createdAt: new Date().toISOString(),
+})
+
+const continueBaRequirements = async (run: OrchestratorRun) => {
+  try {
+    const decision = await createOpenAIBaDecision(run)
+
+    if (decision.status === 'complete' && decision.requirementsDocument) {
+      const artifact = createRequirementsArtifact(
+        decision.requirementsDocument,
+        openaiClient ? 'openai' : 'mock',
+      )
+      run.artifacts = [...run.artifacts, artifact]
+      run.requirements.status = 'complete'
+      run.requirements.baselineArtifactId = artifact.id
+      run.currentStepIndex = 1
+      run.isRunning = true
+      appendLog(
+        run,
+        'Business analyst agent',
+        'Baseline requirements document created and handed off to developer agents.',
+        'success',
+      )
+      scheduleRun(run.id)
+      return
+    }
+
+    const question =
+      decision.question ??
+      'What acceptance criteria should determine whether this feature is ready for handoff?'
+    run.requirements.messages.push(makeRequirementMessage('ba', question))
+    appendLog(run, 'Business analyst agent', 'Clarifying question sent to the user.')
+  } catch (error) {
+    const fallback = createMockBaDecision(run)
+    if (fallback.status === 'complete' && fallback.requirementsDocument) {
+      const artifact = createRequirementsArtifact(fallback.requirementsDocument, 'mock')
+      artifact.summary =
+        error instanceof Error
+          ? `LLM requirement analysis failed: ${error.message}. Mock baseline generated.`
+          : 'LLM requirement analysis failed. Mock baseline generated.'
+      run.artifacts = [...run.artifacts, artifact]
+      run.requirements.status = 'complete'
+      run.requirements.baselineArtifactId = artifact.id
+      run.currentStepIndex = 1
+      run.isRunning = true
+      appendLog(
+        run,
+        'Business analyst agent',
+        'Mock baseline requirements document created after LLM fallback.',
+        'warning',
+      )
+      scheduleRun(run.id)
+      return
+    }
+
+    run.requirements.messages.push(
+      makeRequirementMessage(
+        'ba',
+        fallback.question ??
+          'What is the most important user workflow this first version must support?',
+      ),
+    )
+    appendLog(
+      run,
+      'LLM provider',
+      'BA clarification fell back to mock question.',
+      'warning',
+    )
+  } finally {
+    run.updatedAt = new Date().toISOString()
+  }
+}
 
 const firstSentence = (value: string) => {
   const normalized = value.replace(/\s+/g, ' ').trim()
@@ -221,17 +461,21 @@ const getCurrentStep = (run: OrchestratorRun) => WORKFLOW[run.currentStepIndex]
 const getRunFlags = (run: OrchestratorRun) => {
   const currentStep = getCurrentStep(run)
   const isComplete = run.currentStepIndex >= WORKFLOW.length
+  const waitingForRequirements = run.requirements.status === 'clarifying'
   const waitingForMerge =
     Boolean(currentStep?.gate === 'merge') && !run.mergeApproved
   const waitingForProd =
     Boolean(currentStep?.gate === 'prod') && !run.prodApproved
-  const isWaiting = !isComplete && (waitingForMerge || waitingForProd)
+  const isWaiting =
+    !isComplete && (waitingForRequirements || waitingForMerge || waitingForProd)
   const progress = Math.round(
     (Math.min(run.currentStepIndex, WORKFLOW.length) / WORKFLOW.length) * 100,
   )
   const status: RunStatus = isComplete
     ? 'complete'
-    : isWaiting
+    : waitingForRequirements
+      ? 'requirements'
+      : waitingForMerge || waitingForProd
       ? 'waiting-for-human'
       : run.isRunning
         ? 'running'
@@ -240,6 +484,7 @@ const getRunFlags = (run: OrchestratorRun) => {
   return {
     currentStep,
     isComplete,
+    waitingForRequirements,
     waitingForMerge,
     waitingForProd,
     isWaiting,
@@ -386,7 +631,7 @@ app.get('/api/runs/:runId', (request, response) => {
   response.json({ run: serializeRun(run) })
 })
 
-app.post('/api/runs', (request, response) => {
+app.post('/api/runs', async (request, response) => {
   const featureRequest =
     typeof request.body?.featureRequest === 'string'
       ? request.body.featureRequest.trim()
@@ -403,11 +648,15 @@ app.post('/api/runs', (request, response) => {
   const run: OrchestratorRun = {
     id: createId(),
     featureRequest,
+    requirements: {
+      status: 'clarifying',
+      messages: [makeRequirementMessage('user', featureRequest)],
+    },
     branchName: `feature/${slug}`,
     currentStepIndex: 0,
     mergeApproved: false,
     prodApproved: false,
-    isRunning: true,
+    isRunning: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     artifacts: [],
@@ -415,7 +664,7 @@ app.post('/api/runs', (request, response) => {
       makeLogEntry('User request', featureRequest),
       makeLogEntry(
         'Orchestrator',
-        'Run started. Business analyst agent is taking intake.',
+        'Run started. Business analyst agent is gathering requirements.',
         'success',
       ),
     ],
@@ -423,9 +672,35 @@ app.post('/api/runs', (request, response) => {
 
   runs.set(run.id, run)
   activeRunId = run.id
-  scheduleRun(run.id)
+  await continueBaRequirements(run)
 
   response.status(201).json({ run: serializeRun(run) })
+})
+
+app.post('/api/runs/:runId/requirements/messages', async (request, response) => {
+  const run = runs.get(request.params.runId)
+  if (!run) {
+    response.status(404).json(notFound)
+    return
+  }
+
+  if (run.requirements.status === 'complete') {
+    response.status(409).json({ error: 'Requirements are already complete.' })
+    return
+  }
+
+  const message =
+    typeof request.body?.message === 'string' ? request.body.message.trim() : ''
+  if (!message) {
+    response.status(400).json({ error: 'message is required.' })
+    return
+  }
+
+  run.requirements.messages.push(makeRequirementMessage('user', message))
+  appendLog(run, 'User', 'Requirement clarification answered.')
+  await continueBaRequirements(run)
+
+  response.json({ run: serializeRun(run) })
 })
 
 app.post('/api/runs/:runId/pause', (request, response) => {

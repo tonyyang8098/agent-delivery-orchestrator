@@ -11,14 +11,17 @@ import {
   ClipboardCheck,
   Code2,
   FileCheck2,
+  FileText,
   GitBranch,
   GitMerge,
   GitPullRequest,
   LockKeyhole,
+  MessageSquareText,
   Pause,
   Play,
   RefreshCcw,
   Rocket,
+  SendHorizontal,
   Server,
   ShieldCheck,
   Terminal,
@@ -36,13 +39,19 @@ import {
   type GateType,
   type LlmProviderStatus,
   type LogEntry,
+  type RequirementsState,
   type StepState,
   type WorkflowStep,
 } from './orchestratorModel'
 import './App.css'
 
 type ApiStatus = 'checking' | 'online' | 'offline'
-type RunStatus = 'running' | 'paused' | 'waiting-for-human' | 'complete'
+type RunStatus =
+  | 'requirements'
+  | 'running'
+  | 'paused'
+  | 'waiting-for-human'
+  | 'complete'
 
 type OrchestratorRun = {
   id: string
@@ -54,9 +63,11 @@ type OrchestratorRun = {
   isRunning: boolean
   createdAt: string
   updatedAt: string
+  requirements: RequirementsState
   logEntries: LogEntry[]
   currentStep?: WorkflowStep
   isComplete: boolean
+  waitingForRequirements: boolean
   waitingForMerge: boolean
   waitingForProd: boolean
   isWaiting: boolean
@@ -147,6 +158,7 @@ function App() {
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
   const [apiError, setApiError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [requirementAnswer, setRequirementAnswer] = useState('')
   const [llmProvider, setLlmProvider] = useState<LlmProviderStatus>({
     mode: 'mock',
     model: 'mock-local-persona',
@@ -157,6 +169,7 @@ function App() {
   const currentStepIndex = run?.currentStepIndex ?? 0
   const currentStep = WORKFLOW[currentStepIndex]
   const isComplete = Boolean(run?.isComplete)
+  const waitingForRequirements = Boolean(run?.waitingForRequirements)
   const waitingForMerge = Boolean(run?.waitingForMerge)
   const waitingForProd = Boolean(run?.waitingForProd)
   const isWaiting = Boolean(run?.isWaiting)
@@ -166,6 +179,10 @@ function App() {
   const progress = run?.progress ?? 0
   const logEntries = run?.logEntries ?? defaultLogEntries
   const artifacts = run?.artifacts ?? []
+  const requirementMessages = run?.requirements.messages ?? []
+  const baselineRequirement = run?.requirements.baselineArtifactId
+    ? artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
+    : undefined
 
   const branchName = useMemo(() => {
     if (run?.branchName) return run.branchName
@@ -232,6 +249,7 @@ function App() {
     if (!runStarted) return 'pending'
     if (index < currentStepIndex) return 'complete'
     if (index > currentStepIndex || isComplete) return 'pending'
+    if (index === 0 && waitingForRequirements) return 'waiting'
     if (WORKFLOW[index].gate && isWaiting) return 'waiting'
     return 'active'
   }
@@ -244,6 +262,19 @@ function App() {
       requestApi<RunResponse>('/api/runs', {
         method: 'POST',
         body: JSON.stringify({ featureRequest: trimmedRequest }),
+      }),
+    )
+  }
+
+  const sendRequirementAnswer = () => {
+    if (!run || !requirementAnswer.trim()) return
+
+    const message = requirementAnswer.trim()
+    setRequirementAnswer('')
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/requirements/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ message }),
       }),
     )
   }
@@ -297,6 +328,7 @@ function App() {
     const isAssignedNow = Boolean(currentStep?.agents.includes(agentName))
 
     if (!runStarted) return 'Idle'
+    if (isAssignedNow && waitingForRequirements) return 'Interviewing'
     if (isAssignedNow && isWaiting) return 'Waiting'
     if (isAssignedNow) return 'Working'
     if (currentStepIndex > lastIndex) return 'Complete'
@@ -306,6 +338,7 @@ function App() {
 
   const getAgentFocus = (agent: (typeof AGENTS)[number]) => {
     if (currentStep?.agents.includes(agent.name)) {
+      if (waitingForRequirements) return 'Interviewing the user for complete requirements.'
       return isWaiting ? 'Blocked on a human gate.' : currentStep.detail
     }
     return getAgentState(agent.name) === 'Complete'
@@ -408,6 +441,8 @@ function App() {
             <strong>
               {isComplete
                 ? 'Complete'
+                : waitingForRequirements
+                  ? 'Requirements'
                 : isWaiting
                   ? 'Human gate'
                   : runStarted && isRunning
@@ -424,6 +459,79 @@ function App() {
         </div>
       </section>
 
+      <section className="requirements-panel" aria-label="Requirements chat">
+        <div className="section-heading compact">
+          <div>
+            <p className="eyebrow">BA requirements chat</p>
+            <h2>Clarify before developer handoff</h2>
+          </div>
+          <span className={`status-pill ${baselineRequirement ? 'success' : waitingForRequirements ? 'warning' : ''}`}>
+            {baselineRequirement
+              ? 'Baseline ready'
+              : waitingForRequirements
+                ? 'Questions open'
+                : 'Not started'}
+          </span>
+        </div>
+
+        <div className="requirements-layout">
+          <div className="requirements-chat">
+            {requirementMessages.length === 0 ? (
+              <article className="requirement-empty">
+                <MessageSquareText size={18} />
+                Start a run and the Business Analyst agent will begin the requirements interview.
+              </article>
+            ) : (
+              requirementMessages.map((message) => (
+                <article className={`requirement-message ${message.role}`} key={message.id}>
+                  <strong>{message.role === 'ba' ? 'Business analyst agent' : 'User'}</strong>
+                  <p>{message.content}</p>
+                </article>
+              ))
+            )}
+          </div>
+
+          <div className="requirements-compose">
+            <textarea
+              aria-label="Requirement clarification answer"
+              value={requirementAnswer}
+              onChange={(event) => setRequirementAnswer(event.target.value)}
+              placeholder={
+                waitingForRequirements
+                  ? 'Answer the BA question...'
+                  : 'Requirement chat is available after starting a run.'
+              }
+              rows={4}
+              disabled={!waitingForRequirements || isSubmitting}
+            />
+            <button
+              type="button"
+              className="primary-action"
+              onClick={sendRequirementAnswer}
+              disabled={!waitingForRequirements || !requirementAnswer.trim() || isSubmitting}
+            >
+              <SendHorizontal size={17} />
+              Send answer
+            </button>
+          </div>
+
+          <aside className="requirements-baseline">
+            <div>
+              <h3>
+                <FileText size={18} />
+                Baseline document
+              </h3>
+              <p>
+                {baselineRequirement
+                  ? baselineRequirement.summary
+                  : 'The BA agent will generate this after the clarification loop is complete.'}
+              </p>
+            </div>
+            {baselineRequirement ? <pre>{baselineRequirement.output}</pre> : null}
+          </aside>
+        </div>
+      </section>
+
       <section className="workspace-grid">
         <section className="workflow-panel" aria-label="Workflow">
           <div className="section-heading">
@@ -433,7 +541,9 @@ function App() {
             </div>
             <span className={`status-pill ${isWaiting ? 'warning' : isComplete ? 'success' : ''}`}>
               {isWaiting
-                ? 'Human action required'
+                ? waitingForRequirements
+                  ? 'Requirements chat'
+                  : 'Human action required'
                 : isComplete
                   ? 'Production live'
                   : runStarted

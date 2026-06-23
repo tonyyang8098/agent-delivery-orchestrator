@@ -135,6 +135,7 @@ button:not(:disabled):active {
 }
 
 .request-panel,
+.requirements-panel,
 .workflow-panel,
 .agents-panel,
 .approval-panel,
@@ -152,6 +153,12 @@ button:not(:disabled):active {
   display: grid;
   gap: 18px;
   grid-template-columns: minmax(0, 1fr) minmax(520px, 0.62fr);
+  margin: 0 auto 18px;
+  max-width: 1480px;
+  padding: 18px;
+}
+
+.requirements-panel {
   margin: 0 auto 18px;
   max-width: 1480px;
   padding: 18px;
@@ -264,6 +271,7 @@ textarea:disabled {
 }
 
 .workflow-panel,
+.requirements-panel,
 .agents-panel,
 .approval-panel,
 .repo-panel,
@@ -271,6 +279,113 @@ textarea:disabled {
 .activity-panel,
 .artifact-panel {
   padding: 18px;
+}
+
+.requirements-layout {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.42fr);
+}
+
+.requirements-chat {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.requirement-empty {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 14px;
+  gap: 8px;
+}
+
+.requirement-message {
+  border-radius: 7px;
+  max-width: 88%;
+  padding: 10px 12px;
+}
+
+.requirement-message.ba {
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+}
+
+.requirement-message.user {
+  align-self: end;
+  background: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  margin-left: auto;
+}
+
+.requirement-message strong {
+  color: var(--text-strong);
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.requirement-message p {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.requirements-compose {
+  display: grid;
+  gap: 10px;
+}
+
+.requirements-compose .primary-action {
+  width: 100%;
+}
+
+.requirements-baseline {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+  padding: 12px;
+}
+
+.requirements-baseline h3 {
+  align-items: center;
+  color: var(--text-strong);
+  display: flex;
+  font-size: 16px;
+  font-weight: 760;
+  gap: 8px;
+  margin: 0;
+}
+
+.requirements-baseline p {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+.requirements-baseline pre {
+  background: #111827;
+  border-radius: 7px;
+  color: #f9fafb;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .artifact-panel {
@@ -504,6 +619,11 @@ textarea:disabled {
 }
 
 .agent-row.waiting .agent-icon {
+  background: rgba(180, 83, 9, 0.12);
+  color: #b45309;
+}
+
+.agent-row.interviewing .agent-icon {
   background: rgba(180, 83, 9, 0.12);
   color: #b45309;
 }
@@ -784,6 +904,7 @@ textarea:disabled {
   }
 
   .request-panel,
+  .requirements-panel,
   .workflow-panel,
   .agents-panel,
   .approval-panel,
@@ -796,6 +917,14 @@ textarea:disabled {
 
   .run-summary {
     grid-template-columns: 1fr;
+  }
+
+  .requirements-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .requirement-message {
+    max-width: 100%;
   }
 
   .run-summary div,

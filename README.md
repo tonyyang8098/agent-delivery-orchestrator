@@ -27,6 +27,22 @@ API: http://127.0.0.1:3001/
 
 The backend is an in-memory Express API. It owns the active run state, advances simulated agent work, pauses at human approval gates, and exposes endpoints for UI polling and operator actions.
 
+## Requirements Intake
+
+New feature work starts with a Business Analyst clarification loop:
+
+1. The user enters the feature or tool request.
+2. The Business Analyst agent asks one clarifying question at a time.
+3. The user answers until the BA determines the baseline requirements are complete.
+4. The BA creates a baseline requirements document.
+5. The developer pipeline starts from that baseline and hands work to the Software, Tester, and DevOps agents.
+
+The requirements chat is persisted in the active in-memory run and is exposed through:
+
+```text
+POST /api/runs/:runId/requirements/messages
+```
+
 ## LLM Persona Setup
 
 The backend owns all LLM calls. The browser never receives the API key.
