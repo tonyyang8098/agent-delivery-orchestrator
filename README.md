@@ -10,7 +10,7 @@ The UI models five agents:
 - Tester agent
 - DevOps agent
 
-The workflow covers feature intake, architecture design, user story creation, developer handoff, code build, QA, code check-in, pull request creation, human PR merge, dev deployment, stage deployment, human production approval, and production deployment.
+The workflow covers feature intake, parallel architecture design and user story creation, developer handoff, code build, QA, code check-in, pull request creation, human PR merge, dev deployment, stage deployment, human production approval, and production deployment.
 
 ## Local Development
 
@@ -36,13 +36,13 @@ New feature work starts with a Business Analyst clarification loop:
 2. The Business Analyst agent asks one clarifying question at a time.
 3. The user answers until the BA determines the baseline requirements are complete.
 4. The BA creates a baseline requirements document.
-5. The Architect agent designs the solution from that baseline.
-6. The BA converts the baseline and architecture into user stories.
+5. The Architect agent designs the solution while the BA creates user stories in the same parallel planning gate.
+6. The orchestrator waits until both design and stories are finalized.
 7. The orchestrator hands developer-ready stories and technical notes to the Software, Tester, and DevOps agents.
 
 After the baseline exists, the BA chat stays open. The user can ask the BA to expand scope, add features, modify requirements, or delete existing features. Each accepted change creates a new baseline requirements document version and makes that version the active baseline for the run.
 
-The active baseline is treated as the shared context file for the team. Each downstream agent receives it as `baseline-requirements.md` when producing architecture, user stories, implementation, QA, repository, or deployment handoffs.
+The active baseline is treated as the shared context file for the team. Each downstream agent receives it as `baseline-requirements.md` when producing architecture, user stories, implementation, QA, repository, or deployment handoffs. Developer handoff and build work stay blocked until the parallel design/story gate completes.
 
 The requirements chat is persisted in the active in-memory run and is exposed through:
 

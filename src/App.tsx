@@ -118,8 +118,7 @@ const defaultLogEntries: LogEntry[] = [
 const workflowIcons: Record<string, LucideIcon> = {
   intake: ClipboardCheck,
   'solution-plan': Boxes,
-  'architecture-design': Boxes,
-  'user-stories': FileText,
+  'design-and-stories': Boxes,
   'developer-handoff': ClipboardCheck,
   'build-code': Code2,
   'qa-code': Bug,
@@ -141,8 +140,7 @@ const agentIcons: Record<AgentName, LucideIcon> = {
 }
 
 const readinessChecks: Array<[string, string, LucideIcon]> = [
-  ['Architecture', 'architecture-design', Boxes],
-  ['Stories', 'user-stories', FileText],
+  ['Design/stories', 'design-and-stories', Boxes],
   ['Build', 'build-code', Wrench],
   ['QA', 'qa-code', Bug],
   ['Check in', 'check-in', FileCheck2],

@@ -638,6 +638,12 @@ const buildAgentInput = (
     `Assigned persona: ${agentName}`,
     `Specialization: ${agent.specialization}`,
     `Review responsibility: ${agent.reviewLens}`,
+    step.id === 'design-and-stories'
+      ? 'Parallel gate: the Architect agent produces the solution design while the Business analyst agent produces user stories. Developer handoff must not start until both outputs are complete.'
+      : '',
+    step.id === 'developer-handoff'
+      ? 'Developer gate: use the finalized design and user stories from the prior step before assigning any software implementation work.'
+      : '',
     '',
     getBaselineContextFile(run),
     '',
@@ -739,10 +745,10 @@ const getPeerReviewStatus = (
   }
 
   if (
-    (reviewerAgent === 'Architect agent' && ['user-stories', 'developer-handoff', 'build-code'].includes(step.id)) ||
-    (reviewerAgent === 'Tester agent' && ['architecture-design', 'user-stories', 'developer-handoff', 'build-code', 'pull-request'].includes(step.id)) ||
-    (reviewerAgent === 'DevOps agent' && ['architecture-design', 'developer-handoff', 'check-in', 'pull-request', 'deploy-stage'].includes(step.id)) ||
-    (reviewerAgent === 'Software agent' && ['architecture-design', 'user-stories', 'qa-code', 'deploy-stage', 'deploy-prod'].includes(step.id))
+    (reviewerAgent === 'Architect agent' && ['design-and-stories', 'developer-handoff', 'build-code'].includes(step.id)) ||
+    (reviewerAgent === 'Tester agent' && ['design-and-stories', 'developer-handoff', 'build-code', 'pull-request'].includes(step.id)) ||
+    (reviewerAgent === 'DevOps agent' && ['design-and-stories', 'developer-handoff', 'check-in', 'pull-request', 'deploy-stage'].includes(step.id)) ||
+    (reviewerAgent === 'Software agent' && ['design-and-stories', 'qa-code', 'deploy-stage', 'deploy-prod'].includes(step.id))
   ) {
     return 'watch'
   }
