@@ -161,6 +161,44 @@ const readinessChecks: Array<[string, string, LucideIcon]> = [
   ['Pull request', 'pull-request', GitPullRequest],
 ]
 
+const processingStages: Array<{
+  label: string
+  detail: string
+  stepIds: string[]
+  Icon: LucideIcon
+}> = [
+  {
+    label: 'Clarify',
+    detail: 'BA baseline',
+    stepIds: ['intake'],
+    Icon: MessageSquareText,
+  },
+  {
+    label: 'Design',
+    detail: 'Architecture and stories',
+    stepIds: ['design-and-stories', 'developer-handoff'],
+    Icon: Boxes,
+  },
+  {
+    label: 'Build',
+    detail: 'Code and check in',
+    stepIds: ['build-code', 'check-in'],
+    Icon: Code2,
+  },
+  {
+    label: 'Verify',
+    detail: 'QA and PR review',
+    stepIds: ['qa-code', 'pull-request', 'human-merge'],
+    Icon: ClipboardCheck,
+  },
+  {
+    label: 'Release',
+    detail: 'Dev, stage, prod',
+    stepIds: ['deploy-dev', 'deploy-stage', 'prod-approval', 'deploy-prod'],
+    Icon: Rocket,
+  },
+]
+
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
@@ -490,12 +528,51 @@ function App() {
     return 'Queued'
   }
 
+  const getProcessingStageState = (
+    stage: (typeof processingStages)[number],
+  ): StepState => {
+    if (isComplete) return 'complete'
+    if (!runStarted) return 'pending'
+    if (currentStep && stage.stepIds.includes(currentStep.id)) {
+      return isWaiting ? 'waiting' : 'active'
+    }
+
+    const stageIndexes = stage.stepIds
+      .map((stepId) => WORKFLOW.findIndex((step) => step.id === stepId))
+      .filter((index) => index >= 0)
+    const lastIndex = Math.max(...stageIndexes)
+    return currentStepIndex > lastIndex ? 'complete' : 'pending'
+  }
+
+  const processingMessage = isComplete
+    ? 'Production release is complete and agent artifacts are ready for review.'
+    : waitingForLlmApproval
+      ? `${pendingLlmCall?.model ?? 'The paid model'} is waiting for explicit spend approval.`
+    : waitingForRequirements
+      ? baselineRequirement
+        ? 'BA is reviewing the requested scope change against the current baseline.'
+        : 'BA is interviewing for a complete baseline before developer work starts.'
+    : waitingForAccess
+      ? 'DevOps is paused until scoped AWS/Azure access is verified by the human operator.'
+    : isWaiting
+      ? 'The workflow is parked at a human control gate.'
+    : runStarted && isRunning
+      ? `${currentStep?.agents.map((agent) => agent.replace(' agent', '')).join(' + ') ?? 'Agents'} are working on ${currentStep?.label.toLowerCase() ?? 'the workflow'}.`
+    : runStarted
+      ? 'The run is paused. Resume when you want agents to continue.'
+      : 'Name the project, describe the feature, then start the local delivery run.'
+
   return (
     <main className="orchestrator-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">Local agent orchestrator</p>
-          <h1>Feature delivery control plane</h1>
+        <div className="brand-title">
+          <div className="brand-mark" aria-hidden="true">
+            <span>AF</span>
+          </div>
+          <div>
+            <p className="eyebrow">AgentFlow Studio</p>
+            <h1>Delivery Orchestrator</h1>
+          </div>
         </div>
         <div className="topbar-actions" aria-label="Run controls">
           <span className={`api-status ${apiStatus}`}>API {apiStatus}</span>
@@ -538,6 +615,80 @@ function App() {
           </button>
         </div>
       </header>
+
+      <section
+        className={`processing-panel ${runStarted && isRunning && !isWaiting ? 'is-processing' : ''}`}
+        aria-label="Agent processing visualization"
+      >
+        <div className="processing-copy">
+          <div className="brand-chip">
+            <Activity size={16} />
+            Local delivery control plane
+          </div>
+          <h2>From feature idea to production handoff</h2>
+          <p>{processingMessage}</p>
+          <div className="processing-metrics" aria-label="Run metrics">
+            <span>
+              Project
+              <strong>{repositoryName}</strong>
+            </span>
+            <span>
+              Active step
+              <strong>{currentStep?.label ?? 'Draft request'}</strong>
+            </span>
+            <span>
+              Reviews
+              <strong>{peerReviews.length}</strong>
+            </span>
+          </div>
+        </div>
+
+        <div className="processing-visual">
+          <div className="processing-rail" aria-hidden="true">
+            <span />
+          </div>
+          <div className="stage-map" aria-label="Processing stages">
+            {processingStages.map((stage) => {
+              const state = getProcessingStageState(stage)
+              const Icon = stage.Icon
+              return (
+                <article className={`stage-node ${state}`} key={stage.label}>
+                  <div className="stage-icon">
+                    <Icon size={18} />
+                  </div>
+                  <div>
+                    <strong>{stage.label}</strong>
+                    <span>{stage.detail}</span>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+          <div className="agent-network" aria-label="Agent activity network">
+            <div className="network-hub">
+              <Activity size={18} />
+              <span>{runStarted ? currentStep?.label ?? 'Complete' : 'Ready'}</span>
+            </div>
+            <div className="network-agents">
+              {AGENTS.map((agent) => {
+                const Icon = agentIcons[agent.name]
+                const state = getAgentState(agent.name)
+                const isActiveAgent = Boolean(currentStep?.agents.includes(agent.name))
+                return (
+                  <div
+                    className={`network-agent ${isActiveAgent ? 'active' : ''}`}
+                    key={agent.name}
+                  >
+                    <Icon size={16} />
+                    <strong>{agent.shortName}</strong>
+                    <span>{state}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="request-panel" aria-label="Feature request">
         <div className="request-copy">

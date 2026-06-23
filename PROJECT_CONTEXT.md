@@ -21,6 +21,13 @@ The tool is purpose-bound to software delivery work. It should not behave like a
 - Paid fallback model: `gpt-5.4-mini`, enabled only when an agent is explicitly routed to OpenAI and `OPENAI_API_KEY` is present.
 - Cost control: every paid OpenAI call pauses for explicit user approval unless `LLM_REQUIRE_APPROVAL=false`. Local Ollama/vLLM calls are treated as local `$0` compute.
 
+## Interface Direction
+
+- Product brand: AgentFlow Studio.
+- Primary screen: a local delivery control plane, not a marketing landing page.
+- Visual identity: restrained operational UI with a branded lockup, blue/teal/slate system palette, and compact status chips.
+- Processing visualization: an animated agent-flow panel shows the current delivery stage, active agents, progress metrics, and moving context signal while agents are running.
+
 ## Agent Team
 
 The UI and backend model five personas:
