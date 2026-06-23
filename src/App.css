@@ -40,6 +40,33 @@
   gap: 8px;
 }
 
+.api-status {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 760;
+  height: 32px;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+
+.api-status.online {
+  background: rgba(21, 128, 61, 0.12);
+  border-color: rgba(21, 128, 61, 0.2);
+  color: #166534;
+}
+
+.api-status.offline {
+  background: rgba(180, 83, 9, 0.12);
+  border-color: rgba(180, 83, 9, 0.22);
+  color: #92400e;
+}
+
 button {
   align-items: center;
   border: 1px solid transparent;
@@ -149,6 +176,28 @@ textarea {
 textarea:focus {
   border-color: var(--accent);
   outline: 3px solid rgba(37, 99, 235, 0.14);
+}
+
+textarea:disabled {
+  color: var(--text);
+  cursor: not-allowed;
+  opacity: 0.82;
+}
+
+.api-error {
+  align-items: flex-start;
+  color: #92400e;
+  display: flex;
+  font-size: 13px;
+  font-weight: 680;
+  gap: 8px;
+  line-height: 1.35;
+  margin: 10px 0 0;
+}
+
+.api-error svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
 }
 
 .run-summary {
@@ -631,6 +680,10 @@ textarea:focus {
 
   .topbar-actions {
     justify-content: stretch;
+  }
+
+  .api-status {
+    justify-content: center;
   }
 
   .primary-action {

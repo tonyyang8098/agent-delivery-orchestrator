@@ -26,249 +26,191 @@ import {
   UsersRound,
   Wrench,
 } from 'lucide-react'
+import {
+  AGENTS,
+  ENVIRONMENTS,
+  WORKFLOW,
+  slugify,
+  type AgentName,
+  type GateType,
+  type LogEntry,
+  type StepState,
+  type WorkflowStep,
+} from './orchestratorModel'
 import './App.css'
 
-type AgentName =
-  | 'Business analyst agent'
-  | 'Software agent'
-  | 'Tester agent'
-  | 'DevOps agent'
+type ApiStatus = 'checking' | 'online' | 'offline'
+type RunStatus = 'running' | 'paused' | 'waiting-for-human' | 'complete'
 
-type GateType = 'merge' | 'prod'
-type StepState = 'pending' | 'active' | 'complete' | 'waiting'
-type Tone = 'info' | 'success' | 'warning'
-
-type WorkflowStep = {
+type OrchestratorRun = {
   id: string
-  label: string
-  lane: string
-  detail: string
-  environment: 'Backlog' | 'Repository' | 'Dev' | 'Stage' | 'Prod'
-  agents: AgentName[]
-  icon: LucideIcon
-  gate?: GateType
+  featureRequest: string
+  branchName: string
+  currentStepIndex: number
+  mergeApproved: boolean
+  prodApproved: boolean
+  isRunning: boolean
+  createdAt: string
+  updatedAt: string
+  logEntries: LogEntry[]
+  currentStep?: WorkflowStep
+  isComplete: boolean
+  waitingForMerge: boolean
+  waitingForProd: boolean
+  isWaiting: boolean
+  progress: number
+  status: RunStatus
 }
 
-type Agent = {
-  name: AgentName
-  shortName: string
-  mission: string
-  icon: LucideIcon
+type RunResponse = {
+  run: OrchestratorRun | null
 }
 
-type LogEntry = {
-  id: string
-  at: string
-  actor: string
-  message: string
-  tone: Tone
+type ApiErrorResponse = {
+  error?: string
 }
 
-const WORKFLOW: WorkflowStep[] = [
-  {
-    id: 'intake',
-    label: 'Feature intake',
-    lane: 'Plan',
-    detail: 'Capture scope, acceptance criteria, risks, and release target.',
-    environment: 'Backlog',
-    agents: ['Business analyst agent'],
-    icon: ClipboardCheck,
-  },
-  {
-    id: 'solution-plan',
-    label: 'Solution plan',
-    lane: 'Plan',
-    detail: 'Split the work into branch tasks, test notes, and deployment needs.',
-    environment: 'Repository',
-    agents: ['Business analyst agent', 'Software agent'],
-    icon: Boxes,
-  },
-  {
-    id: 'build-code',
-    label: 'Build code',
-    lane: 'Build',
-    detail: 'Implement the feature on an isolated branch with local checks.',
-    environment: 'Dev',
-    agents: ['Software agent'],
-    icon: Code2,
-  },
-  {
-    id: 'qa-code',
-    label: 'QA code',
-    lane: 'Verify',
-    detail: 'Run functional, regression, and acceptance coverage.',
-    environment: 'Dev',
-    agents: ['Tester agent'],
-    icon: Bug,
-  },
-  {
-    id: 'check-in',
-    label: 'Check in code',
-    lane: 'Repository',
-    detail: 'Commit reviewed changes and attach traceable work notes.',
-    environment: 'Repository',
-    agents: ['Software agent'],
-    icon: GitBranch,
-  },
-  {
-    id: 'pull-request',
-    label: 'Conduct pull request',
-    lane: 'Repository',
-    detail: 'Open PR, publish build evidence, and request human review.',
-    environment: 'Repository',
-    agents: ['DevOps agent', 'Software agent'],
-    icon: GitPullRequest,
-  },
-  {
-    id: 'human-merge',
-    label: 'Human merge',
-    lane: 'Approval',
-    detail: 'Human manually merges the pull request before deployment begins.',
-    environment: 'Repository',
-    agents: ['DevOps agent'],
-    icon: GitMerge,
-    gate: 'merge',
-  },
-  {
-    id: 'deploy-dev',
-    label: 'Deploy dev',
-    lane: 'Deploy',
-    detail: 'Deploy merged code to the local dev environment.',
-    environment: 'Dev',
-    agents: ['DevOps agent'],
-    icon: Server,
-  },
-  {
-    id: 'deploy-stage',
-    label: 'Deploy stage',
-    lane: 'Deploy',
-    detail: 'Promote the same build artifact into stage for release validation.',
-    environment: 'Stage',
-    agents: ['DevOps agent', 'Tester agent'],
-    icon: Rocket,
-  },
-  {
-    id: 'prod-approval',
-    label: 'Human prod approval',
-    lane: 'Approval',
-    detail: 'Human signs off before anything can deploy to production.',
-    environment: 'Prod',
-    agents: ['DevOps agent'],
-    icon: LockKeyhole,
-    gate: 'prod',
-  },
-  {
-    id: 'deploy-prod',
-    label: 'Deploy prod',
-    lane: 'Deploy',
-    detail: 'Deploy to production, run smoke checks, and keep monitoring open.',
-    environment: 'Prod',
-    agents: ['DevOps agent', 'Tester agent'],
-    icon: ShieldCheck,
-  },
-]
-
-const AGENTS: Agent[] = [
-  {
-    name: 'Business analyst agent',
-    shortName: 'Business analyst',
-    mission: 'Requirements, acceptance criteria, and release notes.',
-    icon: UsersRound,
-  },
-  {
-    name: 'Software agent',
-    shortName: 'Software',
-    mission: 'Code implementation, branch work, and commits.',
-    icon: Code2,
-  },
-  {
-    name: 'Tester agent',
-    shortName: 'Tester',
-    mission: 'QA coverage, regression checks, and evidence.',
-    icon: Bug,
-  },
-  {
-    name: 'DevOps agent',
-    shortName: 'DevOps',
-    mission: 'PR operations, environments, and deployments.',
-    icon: Terminal,
-  },
-]
-
-const ENVIRONMENTS = [
-  {
-    name: 'Dev',
-    purpose: 'Agent validation',
-    stepId: 'deploy-dev',
-    checks: ['Build artifact', 'Smoke tests'],
-  },
-  {
-    name: 'Stage',
-    purpose: 'Release validation',
-    stepId: 'deploy-stage',
-    checks: ['Regression set', 'Approval evidence'],
-  },
-  {
-    name: 'Prod',
-    purpose: 'Human-approved release',
-    stepId: 'deploy-prod',
-    checks: ['Approval gate', 'Post-deploy monitor'],
-  },
-]
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:3001'
 
 const defaultRequest =
   'Build a customer onboarding checklist with role-based approval and audit history.'
 
-const makeLogEntry = (actor: string, message: string, tone: Tone = 'info') => ({
-  id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  at: new Date().toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }),
-  actor,
-  message,
-  tone,
-})
+const defaultLogEntries: LogEntry[] = [
+  {
+    id: 'local-ready',
+    at: '--:--:--',
+    actor: 'Orchestrator',
+    message: 'Local control plane is ready.',
+    tone: 'info',
+  },
+]
 
-const slugify = (value: string) =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 42)
+const workflowIcons: Record<string, LucideIcon> = {
+  intake: ClipboardCheck,
+  'solution-plan': Boxes,
+  'build-code': Code2,
+  'qa-code': Bug,
+  'check-in': GitBranch,
+  'pull-request': GitPullRequest,
+  'human-merge': GitMerge,
+  'deploy-dev': Server,
+  'deploy-stage': Rocket,
+  'prod-approval': LockKeyhole,
+  'deploy-prod': ShieldCheck,
+}
+
+const agentIcons: Record<AgentName, LucideIcon> = {
+  'Business analyst agent': UsersRound,
+  'Software agent': Code2,
+  'Tester agent': Bug,
+  'DevOps agent': Terminal,
+}
+
+const readinessChecks: Array<[string, string, LucideIcon]> = [
+  ['Build', 'build-code', Wrench],
+  ['QA', 'qa-code', Bug],
+  ['Check in', 'check-in', FileCheck2],
+  ['Pull request', 'pull-request', GitPullRequest],
+]
+
+const requestApi = async <T,>(path: string, options: RequestInit = {}) => {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  })
+
+  if (!response.ok) {
+    const errorBody = (await response
+      .json()
+      .catch(() => ({}))) as ApiErrorResponse
+    throw new Error(errorBody.error ?? `API request failed with ${response.status}.`)
+  }
+
+  return (await response.json()) as T
+}
 
 function App() {
   const [featureRequest, setFeatureRequest] = useState(defaultRequest)
-  const [runStarted, setRunStarted] = useState(false)
-  const [isRunning, setIsRunning] = useState(false)
-  const [currentStepIndex, setCurrentStepIndex] = useState(0)
-  const [mergeApproved, setMergeApproved] = useState(false)
-  const [prodApproved, setProdApproved] = useState(false)
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([
-    makeLogEntry('Orchestrator', 'Local control plane is ready.'),
-  ])
+  const [run, setRun] = useState<OrchestratorRun | null>(null)
+  const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
+  const [apiError, setApiError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
+  const runStarted = Boolean(run)
+  const currentStepIndex = run?.currentStepIndex ?? 0
   const currentStep = WORKFLOW[currentStepIndex]
-  const isComplete = runStarted && currentStepIndex >= WORKFLOW.length
-  const waitingForMerge =
-    runStarted && currentStep?.gate === 'merge' && !mergeApproved
-  const waitingForProd =
-    runStarted && currentStep?.gate === 'prod' && !prodApproved
-  const isWaiting = waitingForMerge || waitingForProd
-  const completedCount = runStarted
-    ? Math.min(currentStepIndex, WORKFLOW.length)
-    : 0
-  const progress = Math.round((completedCount / WORKFLOW.length) * 100)
+  const isComplete = Boolean(run?.isComplete)
+  const waitingForMerge = Boolean(run?.waitingForMerge)
+  const waitingForProd = Boolean(run?.waitingForProd)
+  const isWaiting = Boolean(run?.isWaiting)
+  const isRunning = Boolean(run?.isRunning)
+  const mergeApproved = Boolean(run?.mergeApproved)
+  const prodApproved = Boolean(run?.prodApproved)
+  const progress = run?.progress ?? 0
+  const logEntries = run?.logEntries ?? defaultLogEntries
 
   const branchName = useMemo(() => {
+    if (run?.branchName) return run.branchName
+
     const slug = slugify(featureRequest) || 'new-local-work-item'
     return `feature/${slug}`
-  }, [featureRequest])
+  }, [featureRequest, run?.branchName])
 
-  const appendLog = useCallback((actor: string, message: string, tone: Tone = 'info') => {
-    setLogEntries((entries) => [...entries, makeLogEntry(actor, message, tone)].slice(-12))
+  const loadActiveRun = useCallback(async () => {
+    try {
+      await requestApi('/health')
+      const response = await requestApi<RunResponse>('/api/runs/active')
+      setApiStatus('online')
+      setApiError(null)
+      setRun(response.run)
+      if (response.run) setFeatureRequest(response.run.featureRequest)
+    } catch (error) {
+      setApiStatus('offline')
+      setApiError(
+        error instanceof Error
+          ? `${error.message} Start the backend with npm run api.`
+          : 'Backend API is offline. Start it with npm run api.',
+      )
+    }
   }, [])
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => {
+      void loadActiveRun()
+    }, 0)
+    const interval = window.setInterval(() => {
+      void loadActiveRun()
+    }, 1000)
+
+    return () => {
+      window.clearTimeout(initialLoad)
+      window.clearInterval(interval)
+    }
+  }, [loadActiveRun])
+
+  const applyRunResponse = (response: RunResponse) => {
+    setRun(response.run)
+    if (response.run) setFeatureRequest(response.run.featureRequest)
+    setApiError(null)
+  }
+
+  const mutateRun = async (operation: () => Promise<RunResponse>) => {
+    setIsSubmitting(true)
+    try {
+      const response = await operation()
+      applyRunResponse(response)
+      setApiStatus('online')
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'API request failed.')
+      if (error instanceof TypeError) setApiStatus('offline')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   const getStepState = (index: number): StepState => {
     if (!runStarted) return 'pending'
@@ -282,87 +224,36 @@ function App() {
     const trimmedRequest = featureRequest.trim()
     if (!trimmedRequest) return
 
-    setRunStarted(true)
-    setIsRunning(true)
-    setCurrentStepIndex(0)
-    setMergeApproved(false)
-    setProdApproved(false)
-    setLogEntries([
-      makeLogEntry('User request', trimmedRequest),
-      makeLogEntry(
-        'Orchestrator',
-        'Run started. Business analyst agent is taking intake.',
-        'success',
-      ),
-    ])
+    void mutateRun(() =>
+      requestApi<RunResponse>('/api/runs', {
+        method: 'POST',
+        body: JSON.stringify({ featureRequest: trimmedRequest }),
+      }),
+    )
   }
 
   const resetRun = () => {
-    setRunStarted(false)
-    setIsRunning(false)
-    setCurrentStepIndex(0)
-    setMergeApproved(false)
-    setProdApproved(false)
-    setLogEntries([makeLogEntry('Orchestrator', 'Workspace reset for the next feature.')])
+    if (!run) {
+      setFeatureRequest(defaultRequest)
+      setApiError(null)
+      return
+    }
+
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/reset`, {
+        method: 'POST',
+      }),
+    )
   }
 
-  const completeActiveStep = useCallback(() => {
-    const step = WORKFLOW[currentStepIndex]
-    if (!step) return
-
-    appendLog(
-      step.agents.join(' + '),
-      `${step.label} complete. ${step.environment} handoff updated.`,
-      'success',
-    )
-
-    const nextIndex = currentStepIndex + 1
-    const nextStep = WORKFLOW[nextIndex]
-    setCurrentStepIndex(nextIndex)
-
-    if (!nextStep) {
-      setIsRunning(false)
-      appendLog('Orchestrator', 'Release completed through production.', 'success')
-      return
-    }
-
-    if (nextStep.gate === 'merge' && !mergeApproved) {
-      setIsRunning(false)
-      appendLog('Human gate', 'Pull request is ready for manual merge.', 'warning')
-      return
-    }
-
-    if (nextStep.gate === 'prod' && !prodApproved) {
-      setIsRunning(false)
-      appendLog('Human gate', 'Production deployment is waiting for approval.', 'warning')
-    }
-  }, [appendLog, currentStepIndex, mergeApproved, prodApproved])
-
-  useEffect(() => {
-    if (!runStarted || !isRunning || isWaiting || isComplete) return
-
-    const timer = window.setTimeout(() => {
-      completeActiveStep()
-    }, 1300)
-
-    return () => window.clearTimeout(timer)
-  }, [completeActiveStep, isComplete, isRunning, isWaiting, runStarted])
-
   const approveGate = (gate: GateType) => {
-    if (!currentStep || currentStep.gate !== gate) return
+    if (!run) return
 
-    if (gate === 'merge') {
-      setMergeApproved(true)
-      setCurrentStepIndex((index) => index + 1)
-      setIsRunning(true)
-      appendLog('Human reviewer', 'Pull request manually merged into main.', 'success')
-      return
-    }
-
-    setProdApproved(true)
-    setCurrentStepIndex((index) => index + 1)
-    setIsRunning(true)
-    appendLog('Human approver', 'Production release approved.', 'success')
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/approvals/${gate}`, {
+        method: 'POST',
+      }),
+    )
   }
 
   const toggleRunning = () => {
@@ -370,8 +261,15 @@ function App() {
       startRun()
       return
     }
-    if (isComplete || isWaiting) return
-    setIsRunning((running) => !running)
+
+    if (!run || isComplete || isWaiting) return
+
+    const action = isRunning ? 'pause' : 'resume'
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/${action}`, {
+        method: 'POST',
+      }),
+    )
   }
 
   const getAgentState = (agentName: AgentName) => {
@@ -390,7 +288,7 @@ function App() {
     return 'Queued'
   }
 
-  const getAgentFocus = (agent: Agent) => {
+  const getAgentFocus = (agent: (typeof AGENTS)[number]) => {
     if (currentStep?.agents.includes(agent.name)) {
       return isWaiting ? 'Blocked on a human gate.' : currentStep.detail
     }
@@ -425,15 +323,30 @@ function App() {
           <h1>Feature delivery control plane</h1>
         </div>
         <div className="topbar-actions" aria-label="Run controls">
+          <span className={`api-status ${apiStatus}`}>API {apiStatus}</span>
           <button
             type="button"
             className="primary-action"
             onClick={runStarted ? toggleRunning : startRun}
-            disabled={!featureRequest.trim() || isComplete || isWaiting}
+            disabled={
+              !featureRequest.trim() ||
+              isComplete ||
+              isWaiting ||
+              apiStatus !== 'online' ||
+              isSubmitting
+            }
             title={runStarted && isRunning ? 'Pause run' : 'Start or resume run'}
           >
             {runStarted && isRunning ? <Pause size={18} /> : <Play size={18} />}
-            <span>{runStarted && isRunning ? 'Pause' : runStarted ? 'Resume' : 'Start'}</span>
+            <span>
+              {isSubmitting
+                ? 'Working'
+                : runStarted && isRunning
+                  ? 'Pause'
+                  : runStarted
+                    ? 'Resume'
+                    : 'Start'}
+            </span>
           </button>
           <button
             type="button"
@@ -441,6 +354,7 @@ function App() {
             onClick={resetRun}
             title="Reset run"
             aria-label="Reset run"
+            disabled={isSubmitting}
           >
             <RefreshCcw size={18} />
           </button>
@@ -456,7 +370,14 @@ function App() {
             onChange={(event) => setFeatureRequest(event.target.value)}
             rows={3}
             spellCheck="true"
+            disabled={runStarted && !isComplete}
           />
+          {apiError ? (
+            <p className="api-error" role="status">
+              <AlertTriangle size={16} />
+              {apiError}
+            </p>
+          ) : null}
         </div>
         <div className="run-summary" aria-label="Run summary">
           <div>
@@ -492,14 +413,20 @@ function App() {
               <h2>Build, QA, PR, merge, deploy</h2>
             </div>
             <span className={`status-pill ${isWaiting ? 'warning' : isComplete ? 'success' : ''}`}>
-              {isWaiting ? 'Human action required' : isComplete ? 'Production live' : 'In progress'}
+              {isWaiting
+                ? 'Human action required'
+                : isComplete
+                  ? 'Production live'
+                  : runStarted
+                    ? 'In progress'
+                    : 'Waiting for request'}
             </span>
           </div>
 
           <ol className="workflow-list">
             {WORKFLOW.map((step, index) => {
               const state = getStepState(index)
-              const Icon = step.icon
+              const Icon = workflowIcons[step.id] ?? Circle
               const StatusIcon =
                 state === 'complete'
                   ? CheckCircle2
@@ -546,10 +473,10 @@ function App() {
             </div>
             <div className="agent-list">
               {AGENTS.map((agent) => {
-                const Icon = agent.icon
+                const Icon = agentIcons[agent.name]
                 const state = getAgentState(agent.name)
                 return (
-                  <article className={`agent-row ${state.toLowerCase().replace(' ', '-')}`} key={agent.name}>
+                  <article className={`agent-row ${state.toLowerCase().replaceAll(' ', '-')}`} key={agent.name}>
                     <div className="agent-icon">
                       <Icon size={18} />
                     </div>
@@ -586,7 +513,7 @@ function App() {
                 <button
                   type="button"
                   onClick={() => approveGate('merge')}
-                  disabled={!waitingForMerge}
+                  disabled={!waitingForMerge || isSubmitting}
                 >
                   <UserCheck size={16} />
                   Mark merged
@@ -604,7 +531,7 @@ function App() {
                 <button
                   type="button"
                   onClick={() => approveGate('prod')}
-                  disabled={!waitingForProd}
+                  disabled={!waitingForProd || isSubmitting}
                 >
                   <ShieldCheck size={16} />
                   Approve prod
@@ -632,16 +559,11 @@ function App() {
               <span>main</span>
             </div>
             <div className="check-grid">
-              {[
-                ['Build', 'build-code', Wrench],
-                ['QA', 'qa-code', Bug],
-                ['Check in', 'check-in', FileCheck2],
-                ['Pull request', 'pull-request', GitPullRequest],
-              ].map(([label, stepId, Icon]) => (
-                <div className="check-row" key={stepId as string}>
+              {readinessChecks.map(([label, stepId, Icon]) => (
+                <div className="check-row" key={stepId}>
                   <Icon size={17} />
-                  <span>{label as string}</span>
-                  <strong>{checkStatus(stepId as string)}</strong>
+                  <span>{label}</span>
+                  <strong>{checkStatus(stepId)}</strong>
                 </div>
               ))}
             </div>

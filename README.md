@@ -1,6 +1,6 @@
 # Agent Delivery Orchestrator
 
-A local React prototype for coordinating AI-assisted feature delivery across dev, stage, and prod.
+A local React and Node prototype for coordinating AI-assisted feature delivery across dev, stage, and prod.
 
 The UI models four agents:
 
@@ -15,13 +15,23 @@ The workflow covers feature intake, planning, code build, QA, code check-in, pul
 
 ```bash
 npm install
-npm run dev
+npm run dev:all
 ```
 
-Open the local URL printed by Vite. The current dev server is configured to run on:
+The local services run on:
 
 ```text
-http://127.0.0.1:5173/
+UI:  http://127.0.0.1:5173/
+API: http://127.0.0.1:3001/
+```
+
+The backend is an in-memory Express API. It owns the active run state, advances simulated agent work, pauses at human approval gates, and exposes endpoints for UI polling and operator actions.
+
+Run the services separately if needed:
+
+```bash
+npm run api
+npm run dev
 ```
 
 ## Validation
