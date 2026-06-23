@@ -31,8 +31,10 @@ import {
   ENVIRONMENTS,
   WORKFLOW,
   slugify,
+  type AgentArtifact,
   type AgentName,
   type GateType,
+  type LlmProviderStatus,
   type LogEntry,
   type StepState,
   type WorkflowStep,
@@ -60,10 +62,16 @@ type OrchestratorRun = {
   isWaiting: boolean
   progress: number
   status: RunStatus
+  artifacts: AgentArtifact[]
+  llmProvider: LlmProviderStatus
 }
 
 type RunResponse = {
   run: OrchestratorRun | null
+}
+
+type HealthResponse = {
+  llmProvider: LlmProviderStatus
 }
 
 type ApiErrorResponse = {
@@ -139,6 +147,11 @@ function App() {
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
   const [apiError, setApiError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [llmProvider, setLlmProvider] = useState<LlmProviderStatus>({
+    mode: 'mock',
+    model: 'mock-local-persona',
+    configured: false,
+  })
 
   const runStarted = Boolean(run)
   const currentStepIndex = run?.currentStepIndex ?? 0
@@ -152,6 +165,7 @@ function App() {
   const prodApproved = Boolean(run?.prodApproved)
   const progress = run?.progress ?? 0
   const logEntries = run?.logEntries ?? defaultLogEntries
+  const artifacts = run?.artifacts ?? []
 
   const branchName = useMemo(() => {
     if (run?.branchName) return run.branchName
@@ -162,10 +176,11 @@ function App() {
 
   const loadActiveRun = useCallback(async () => {
     try {
-      await requestApi('/health')
+      const health = await requestApi<HealthResponse>('/health')
       const response = await requestApi<RunResponse>('/api/runs/active')
       setApiStatus('online')
       setApiError(null)
+      setLlmProvider(response.run?.llmProvider ?? health.llmProvider)
       setRun(response.run)
       if (response.run) setFeatureRequest(response.run.featureRequest)
     } catch (error) {
@@ -194,6 +209,7 @@ function App() {
 
   const applyRunResponse = (response: RunResponse) => {
     setRun(response.run)
+    if (response.run?.llmProvider) setLlmProvider(response.run.llmProvider)
     if (response.run) setFeatureRequest(response.run.featureRequest)
     setApiError(null)
   }
@@ -324,6 +340,9 @@ function App() {
         </div>
         <div className="topbar-actions" aria-label="Run controls">
           <span className={`api-status ${apiStatus}`}>API {apiStatus}</span>
+          <span className={`api-status ${llmProvider.mode}`}>
+            LLM {llmProvider.mode}
+          </span>
           <button
             type="button"
             className="primary-action"
@@ -620,6 +639,37 @@ function App() {
                 </div>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="artifact-panel">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">LLM artifacts</p>
+              <h2>Persona output</h2>
+            </div>
+            <span className="status-pill">
+              {llmProvider.model}
+            </span>
+          </div>
+          <div className="artifact-list">
+            {artifacts.length === 0 ? (
+              <article className="artifact-empty">
+                Start a run to generate persona handoffs for each step.
+              </article>
+            ) : (
+              artifacts.slice(-6).reverse().map((artifact) => (
+                <article className="artifact-row" key={artifact.id}>
+                  <div className="artifact-meta">
+                    <span>{artifact.stepLabel}</span>
+                    <strong>{artifact.agentName.replace(' agent', '')}</strong>
+                  </div>
+                  <h3>{artifact.title}</h3>
+                  <p>{artifact.summary}</p>
+                  <pre>{artifact.output}</pre>
+                </article>
+              ))
+            )}
           </div>
         </section>
       </section>

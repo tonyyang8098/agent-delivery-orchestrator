@@ -67,6 +67,18 @@
   color: #92400e;
 }
 
+.api-status.openai {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.2);
+  color: #1d4ed8;
+}
+
+.api-status.mock {
+  background: rgba(113, 122, 108, 0.12);
+  border-color: rgba(113, 122, 108, 0.22);
+  color: #4b5563;
+}
+
 button {
   align-items: center;
   border: 1px solid transparent;
@@ -128,7 +140,8 @@ button:not(:disabled):active {
 .approval-panel,
 .repo-panel,
 .environment-panel,
-.activity-panel {
+.activity-panel,
+.artifact-panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -255,8 +268,13 @@ textarea:disabled {
 .approval-panel,
 .repo-panel,
 .environment-panel,
-.activity-panel {
+.activity-panel,
+.artifact-panel {
   padding: 18px;
+}
+
+.artifact-panel {
+  grid-column: 1 / -1;
 }
 
 .side-stack {
@@ -453,7 +471,8 @@ textarea:disabled {
 .agent-list,
 .approval-list,
 .environment-list,
-.activity-list {
+.activity-list,
+.artifact-list {
   display: grid;
   gap: 10px;
 }
@@ -652,6 +671,80 @@ textarea:disabled {
   font-size: 13px;
 }
 
+.artifact-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.artifact-row,
+.artifact-empty {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.artifact-empty {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.artifact-meta {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.artifact-meta span,
+.artifact-meta strong {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.artifact-meta span {
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+}
+
+.artifact-meta strong {
+  background: var(--surface-warm);
+  color: var(--text-muted);
+}
+
+.artifact-row h3 {
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.artifact-row p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 6px 0 10px;
+}
+
+.artifact-row pre {
+  background: #111827;
+  border-radius: 7px;
+  color: #f9fafb;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @media (max-width: 1180px) {
   .request-panel,
   .workspace-grid,
@@ -696,7 +789,8 @@ textarea:disabled {
   .approval-panel,
   .repo-panel,
   .environment-panel,
-  .activity-panel {
+  .activity-panel,
+  .artifact-panel {
     padding: 14px;
   }
 
@@ -748,6 +842,10 @@ textarea:disabled {
   }
 
   .log-row {
+    grid-template-columns: 1fr;
+  }
+
+  .artifact-list {
     grid-template-columns: 1fr;
   }
 }

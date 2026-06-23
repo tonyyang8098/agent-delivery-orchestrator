@@ -40,6 +40,25 @@ export type LogEntry = {
   tone: Tone
 }
 
+export type AgentArtifact = {
+  id: string
+  stepId: string
+  stepLabel: string
+  agentName: AgentName
+  title: string
+  summary: string
+  output: string
+  provider: 'openai' | 'mock'
+  model: string
+  createdAt: string
+}
+
+export type LlmProviderStatus = {
+  mode: 'openai' | 'mock'
+  model: string
+  configured: boolean
+}
+
 export const WORKFLOW: WorkflowStep[] = [
   {
     id: 'intake',
