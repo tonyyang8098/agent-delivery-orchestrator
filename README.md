@@ -144,6 +144,19 @@ Create a local `.env` file from the example:
 cp .env.example .env
 ```
 
+The UI shows the active mode in the **Model routing** section:
+
+- **Mock mode**: `$0`, no model server, no API key. Good for testing workflow and UI.
+- **Local model mode**: `$0 API bill`, uses Ollama, vLLM, LM Studio, or another OpenAI-compatible local `/v1` endpoint.
+- **Paid OpenAI mode**: uses OpenAI for agents routed to `openai`; every paid call pauses for approval when `LLM_REQUIRE_APPROVAL=true`.
+
+Use mock mode when you only want to test locally:
+
+```text
+LLM_PROVIDER=mock
+OPENAI_API_KEY=
+```
+
 Set the local model routing first:
 
 ```text
@@ -164,6 +177,8 @@ CONTEXT_FILE_LIMIT=6
 CONTEXT_FILE_MAX_BYTES=5242880
 ```
 
+For Ollama, start an OpenAI-compatible local endpoint separately, then point `LOCAL_LLM_BASE_URL` at it. The orchestrator does not start local model servers for you.
+
 The backend can route each persona to a local OpenAI-compatible endpoint, such as Ollama or vLLM:
 
 - Business Analyst agent: `Qwen3.6-27B`
@@ -180,6 +195,17 @@ OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-5.4-mini
 ARCHITECT_AGENT_PROVIDER=openai
 ARCHITECT_AGENT_OPENAI_MODEL=gpt-5.4-mini
+```
+
+You can also mix providers per persona, for example local BA/Tester/DevOps, local code model for Software, and OpenAI only for Architect:
+
+```text
+LLM_PROVIDER=local
+BA_AGENT_PROVIDER=local
+ARCHITECT_AGENT_PROVIDER=openai
+SOFTWARE_AGENT_PROVIDER=local
+TESTER_AGENT_PROVIDER=local
+DEVOPS_AGENT_PROVIDER=local
 ```
 
 When no configured local or OpenAI provider is available for an agent, the API automatically uses mock persona output so the local workflow remains testable.

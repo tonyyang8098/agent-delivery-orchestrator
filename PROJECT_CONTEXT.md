@@ -28,6 +28,7 @@ The tool is purpose-bound to software delivery work. It should not behave like a
 - Visual identity: restrained operational UI with a branded lockup, blue/teal/slate system palette, and compact status chips.
 - Processing visualization: an animated agent-flow panel shows the current delivery stage, active agents, progress metrics, and moving context signal while agents are running.
 - Navigation model: a workspace navigation strip links directly to request intake, preview/testing, requirements, workflow, release, and intelligence sections so the operator does not need to hunt through panels.
+- Model visibility: the UI includes a Model routing section that explains Mock, Local, Mixed, and Paid OpenAI modes, shows current persona routes, and lists the `.env` switches for each mode.
 
 ## Agent Team
 
@@ -198,6 +199,13 @@ The backend model routing is configured through `.env`:
 - `LOCAL_LLM_BASE_URL` for Ollama/vLLM OpenAI-compatible `/v1` endpoints
 - `*_AGENT_PROVIDER=local|openai|mock`
 - `*_AGENT_LOCAL_MODEL` and `*_AGENT_OPENAI_MODEL`
+
+Mode meanings:
+
+- Mock mode: no model server and no paid API calls. Deterministic persona output keeps the workflow testable.
+- Local mode: routes agents to a local OpenAI-compatible model server. The orchestrator does not start Ollama/vLLM itself.
+- Paid OpenAI mode: only agents routed to `openai` use OpenAI. Paid calls pause for explicit approval when `LLM_REQUIRE_APPROVAL=true`.
+- Mixed mode: different personas are routed to different providers.
 
 ## Cloud Deployment Direction
 

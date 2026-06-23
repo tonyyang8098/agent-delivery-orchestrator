@@ -214,6 +214,41 @@ const processingStages: Array<{
   },
 ]
 
+const modelModeCards = [
+  {
+    mode: 'mock',
+    title: 'Mock mode',
+    cost: '$0',
+    summary:
+      'Uses deterministic persona output. Best for UI, workflow, guardrail, and local preview testing.',
+    config: ['LLM_PROVIDER=mock', 'No OPENAI_API_KEY required'],
+  },
+  {
+    mode: 'local',
+    title: 'Local model mode',
+    cost: '$0 API bill',
+    summary:
+      'Routes personas to an OpenAI-compatible local server such as Ollama or vLLM.',
+    config: [
+      'LLM_PROVIDER=local',
+      'LOCAL_LLM_BASE_URL=http://127.0.0.1:11434/v1',
+      'BA_AGENT_PROVIDER=local',
+    ],
+  },
+  {
+    mode: 'openai',
+    title: 'Paid OpenAI mode',
+    cost: 'Paid, approval gated',
+    summary:
+      'Uses OpenAI only for agents explicitly routed to openai. The UI pauses before each paid call.',
+    config: [
+      'OPENAI_API_KEY=...',
+      'OPENAI_MODEL=gpt-5.4-mini',
+      'LLM_REQUIRE_APPROVAL=true',
+    ],
+  },
+] as const
+
 const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
@@ -298,6 +333,28 @@ function App() {
   const repositoryUrl =
     run?.repositoryUrl ||
     `${defaultGithubBaseUrl.replace(/\/+$/, '')}/${githubOwner.replace(/^@/, '')}/${repositoryName}`
+  const providerModeLabel =
+    llmProvider.mode === 'openai'
+      ? 'Paid OpenAI'
+      : llmProvider.mode === 'local'
+        ? 'Local models'
+      : llmProvider.mode === 'mixed'
+        ? 'Mixed routing'
+        : 'Mock mode'
+  const providerModeDetail =
+    llmProvider.mode === 'openai'
+      ? 'All active persona routes are using OpenAI. Paid calls pause for approval before spend.'
+      : llmProvider.mode === 'local'
+        ? `Personas are routed to local compute${llmProvider.localBaseUrl ? ` at ${llmProvider.localBaseUrl}` : ''}.`
+      : llmProvider.mode === 'mixed'
+        ? 'Personas are split across mock, local, and/or OpenAI routes. Paid OpenAI routes still require approval.'
+        : 'No model server or OpenAI spend is required. The backend uses deterministic local persona output.'
+  const providerCostLabel =
+    llmProvider.mode === 'openai'
+      ? 'Paid'
+      : llmProvider.mode === 'mixed'
+        ? 'Mixed'
+      : '$0'
 
   const branchName = useMemo(() => {
     if (run?.branchName) return run.branchName
@@ -616,7 +673,10 @@ function App() {
         </div>
         <div className="topbar-actions" aria-label="Run controls">
           <span className={`api-status ${apiStatus}`}>API {apiStatus}</span>
-          <span className={`api-status ${llmProvider.mode}`}>
+          <span
+            className={`api-status ${llmProvider.mode}`}
+            title={`${providerModeLabel}: ${llmProvider.model}`}
+          >
             LLM {llmProvider.mode}
           </span>
           <button
@@ -738,6 +798,7 @@ function App() {
         </div>
         <nav className="nav-links" aria-label="Primary workflow sections">
           <a href="#request">Request</a>
+          <a href="#model-routing">Models</a>
           <a href="#preview-test">Preview & test</a>
           <a href="#requirements">Requirements</a>
           <a href="#workflow">Workflow</a>
@@ -747,6 +808,89 @@ function App() {
         <div className="nav-status">
           <span>{localPreview?.status === 'ready' ? 'Preview ready' : 'Preview not built'}</span>
           <strong>{progress}%</strong>
+        </div>
+      </section>
+
+      <section id="model-routing" className="model-routing-panel" aria-label="Model routing and cost mode">
+        <div className="section-heading compact">
+          <div>
+            <p className="eyebrow">Model routing</p>
+            <h2>
+              <BadgeDollarSign size={20} />
+              Local, paid, or mock
+            </h2>
+          </div>
+          <span className={`status-pill ${llmProvider.mode}`}>
+            {providerModeLabel}
+          </span>
+        </div>
+
+        <div className="model-routing-layout">
+          <article className={`model-current-card ${llmProvider.mode}`}>
+            <div className="review-meta">
+              <span>Current backend mode</span>
+              <strong>{providerCostLabel}</strong>
+            </div>
+            <h3>{providerModeLabel}</h3>
+            <p>{providerModeDetail}</p>
+            <div className="model-current-grid">
+              <span>
+                Active model
+                <strong>{llmProvider.model}</strong>
+              </span>
+              <span>
+                Configured
+                <strong>{llmProvider.configured ? 'Yes' : 'No, using mock fallback'}</strong>
+              </span>
+              <span>
+                Local endpoint
+                <strong>{llmProvider.localBaseUrl ?? 'Not configured'}</strong>
+              </span>
+              <span>
+                Paid fallback
+                <strong>{llmProvider.paidFallbackModel ?? 'Not available'}</strong>
+              </span>
+            </div>
+          </article>
+
+          <div className="model-mode-list">
+            {modelModeCards.map((modeCard) => (
+              <article
+                className={`model-mode-card ${modeCard.mode} ${
+                  llmProvider.mode === modeCard.mode ? 'active' : ''
+                }`}
+                key={modeCard.mode}
+              >
+                <div className="review-meta">
+                  <span>{modeCard.title}</span>
+                  <strong>{modeCard.cost}</strong>
+                </div>
+                <p>{modeCard.summary}</p>
+                <pre>{modeCard.config.join('\n')}</pre>
+              </article>
+            ))}
+          </div>
+
+          <div className="model-route-table" aria-label="Persona model routes">
+            <div className="model-route-head">
+              <span>Persona</span>
+              <span>Provider</span>
+              <span>Model</span>
+            </div>
+            {llmProvider.routes.length > 0 ? (
+              llmProvider.routes.map((route) => (
+                <div className="model-route-row" key={route.agentName}>
+                  <span>{route.agentName.replace(' agent', '')}</span>
+                  <strong className={`route-provider ${route.provider}`}>{route.provider}</strong>
+                  <span>{route.model}</span>
+                </div>
+              ))
+            ) : (
+              <div className="model-route-empty">
+                Start the backend to load persona routing.
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
