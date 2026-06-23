@@ -88,6 +88,7 @@ export type DecisionTraceType =
   | 'peer-review'
   | 'blocker'
   | 'approval'
+  | 'local-test'
   | 'memory'
 
 export type DecisionModelTier = 'strong' | 'cheap' | 'deterministic' | 'human'
@@ -135,6 +136,24 @@ export type AgentContextPack = {
   sourceRefs: string[]
   memory: string[]
   updatedAt: string
+}
+
+export type LocalPreviewCheckStatus = 'pass' | 'warning' | 'fail'
+
+export type LocalPreviewCheck = {
+  name: string
+  status: LocalPreviewCheckStatus
+  detail: string
+}
+
+export type LocalPreview = {
+  status: 'ready' | 'failed'
+  url: string
+  kind: 'pong-game' | 'static-brief'
+  title: string
+  summary: string
+  checks: LocalPreviewCheck[]
+  createdAt: string
 }
 
 export type DeploymentAccessBlockerStatus = 'open' | 'resolved'

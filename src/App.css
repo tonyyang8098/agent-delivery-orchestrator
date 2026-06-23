@@ -207,6 +207,8 @@ button:not(:disabled):active {
 
 .request-panel,
 .processing-panel,
+.workspace-nav,
+.preview-test-panel,
 .cost-panel,
 .requirements-panel,
 .workflow-panel,
@@ -502,6 +504,101 @@ button:not(:disabled):active {
   animation: agent-pulse 1.8s ease-in-out infinite;
 }
 
+.workspace-nav {
+  align-items: center;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr) minmax(112px, auto);
+  margin: 0 auto 18px;
+  max-width: 1480px;
+  padding: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.nav-current {
+  min-width: 0;
+}
+
+.nav-current strong {
+  color: var(--text-strong);
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.nav-current span {
+  color: var(--text-muted);
+  display: block;
+  font-size: 12px;
+  font-weight: 720;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.nav-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.nav-links a,
+.preview-link {
+  align-items: center;
+  border-radius: 7px;
+  color: var(--text-strong);
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 760;
+  gap: 7px;
+  min-height: 36px;
+  text-decoration: none;
+}
+
+.nav-links a {
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  padding: 0 10px;
+}
+
+.nav-links a:hover,
+.preview-link:hover {
+  border-color: var(--border-strong);
+  color: var(--accent);
+}
+
+.nav-status {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.nav-status span,
+.nav-status strong {
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+
+.nav-status span {
+  background: rgba(15, 118, 110, 0.1);
+  color: var(--accent-teal);
+}
+
+.nav-status strong {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent);
+}
+
 .request-panel {
   display: grid;
   gap: 18px;
@@ -521,6 +618,161 @@ button:not(:disabled):active {
   margin: 0 auto 18px;
   max-width: 1480px;
   padding: 18px;
+}
+
+.preview-test-panel {
+  margin: 0 auto 18px;
+  max-width: 1480px;
+  padding: 18px;
+}
+
+.preview-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(320px, 0.38fr) minmax(0, 1fr);
+}
+
+.preview-copy {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.preview-copy h3 {
+  color: var(--text-strong);
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.preview-copy p {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preview-actions .primary-action {
+  flex: 0 1 auto;
+}
+
+.preview-link {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0 12px;
+}
+
+.preview-check-list {
+  display: grid;
+  gap: 8px;
+}
+
+.preview-check-row {
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-width: 0;
+  padding: 10px;
+}
+
+.preview-check-row svg {
+  margin-top: 1px;
+}
+
+.preview-check-row.pass {
+  background: rgba(21, 128, 61, 0.07);
+  border-color: rgba(21, 128, 61, 0.18);
+}
+
+.preview-check-row.pass svg {
+  color: #15803d;
+}
+
+.preview-check-row.warning {
+  background: rgba(180, 83, 9, 0.07);
+  border-color: rgba(180, 83, 9, 0.2);
+}
+
+.preview-check-row.warning svg,
+.preview-check-row.fail svg {
+  color: #b45309;
+}
+
+.preview-check-row.fail {
+  background: rgba(190, 18, 60, 0.07);
+  border-color: rgba(190, 18, 60, 0.2);
+}
+
+.preview-check-row strong {
+  color: var(--text-strong);
+  display: block;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.25;
+}
+
+.preview-check-row p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.preview-frame-shell {
+  background: #172033;
+  border: 1px solid rgba(23, 32, 51, 0.16);
+  border-radius: 8px;
+  min-height: 360px;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-frame {
+  background: #ffffff;
+  border: 0;
+  display: block;
+  height: 520px;
+  width: 100%;
+}
+
+.preview-empty {
+  align-content: center;
+  color: #cbd5e1;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-height: 360px;
+  padding: 22px;
+  text-align: center;
+}
+
+.preview-empty svg {
+  color: #7dd3fc;
+}
+
+.preview-empty strong {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.preview-empty span {
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 440px;
 }
 
 .cost-layout {
@@ -788,6 +1040,7 @@ textarea:disabled {
 }
 
 .workflow-panel,
+.preview-test-panel,
 .requirements-panel,
 .agents-panel,
 .approval-panel,
@@ -1694,6 +1947,8 @@ textarea:disabled {
 @media (max-width: 1180px) {
   .request-panel,
   .processing-panel,
+  .workspace-nav,
+  .preview-layout,
   .cost-layout,
   .context-engine-layout,
   .team-layout,
@@ -1714,6 +1969,14 @@ textarea:disabled {
 
   .agent-network {
     grid-template-columns: 1fr;
+  }
+
+  .nav-links {
+    justify-content: flex-start;
+  }
+
+  .nav-status {
+    justify-content: flex-start;
   }
 }
 
@@ -1772,6 +2035,24 @@ textarea:disabled {
     justify-content: stretch;
   }
 
+  .workspace-nav {
+    position: static;
+  }
+
+  .nav-links {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nav-links a {
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .nav-status {
+    justify-content: space-between;
+  }
+
   .api-status {
     justify-content: center;
   }
@@ -1782,6 +2063,8 @@ textarea:disabled {
 
   .request-panel,
   .processing-panel,
+  .workspace-nav,
+  .preview-test-panel,
   .cost-panel,
   .requirements-panel,
   .workflow-panel,
@@ -1866,6 +2149,25 @@ textarea:disabled {
 
   .cost-actions {
     min-width: 0;
+  }
+
+  .preview-actions {
+    display: grid;
+  }
+
+  .preview-actions .primary-action,
+  .preview-link {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .preview-frame-shell,
+  .preview-empty {
+    min-height: 280px;
+  }
+
+  .preview-frame {
+    height: 360px;
   }
 
   .requirement-message {

@@ -27,6 +27,7 @@ The tool is purpose-bound to software delivery work. It should not behave like a
 - Primary screen: a local delivery control plane, not a marketing landing page.
 - Visual identity: restrained operational UI with a branded lockup, blue/teal/slate system palette, and compact status chips.
 - Processing visualization: an animated agent-flow panel shows the current delivery stage, active agents, progress metrics, and moving context signal while agents are running.
+- Navigation model: a workspace navigation strip links directly to request intake, preview/testing, requirements, workflow, release, and intelligence sections so the operator does not need to hunt through panels.
 
 ## Agent Team
 
@@ -107,6 +108,34 @@ The intake form supports:
 
 Files are parsed in memory by the backend. Uploaded binaries are not written to disk. Extracted text, row/column summaries, and small previews become run context for BA clarification, baseline creation, architecture, stories, and downstream agent handoffs.
 
+## Local Preview And Testing
+
+The UI has a Preview & smoke checks section. It calls:
+
+```text
+POST /api/runs/:runId/local-preview
+```
+
+The backend generates deterministic preview files under:
+
+```text
+local-state/previews/<runId>/index.html
+```
+
+The files are served by the local API at:
+
+```text
+/local-previews/<runId>/index.html
+```
+
+This runtime preview directory is ignored by Git. Preview generation does not call a paid LLM, local model, cloud provider, GitHub, or deployment adapter.
+
+Current behavior:
+
+- Pong/table-tennis runs generate a playable browser Pong game with a canvas loop, mouse paddle control, scoring, and restart.
+- Other runs generate a static local project brief showing the feature, repository, branch plan, baseline summary, environment promotion path, and recent agent handoffs.
+- The local test harness attaches smoke-check results to `run.localPreview` and records a `local-test` decision trace entry.
+
 ## Guardrails
 
 The backend rejects unrelated prompts before creating a run or accepting BA chat messages.
@@ -179,6 +208,7 @@ Secrets and cloud credentials must not be committed. Future integrations should 
 - Real GitHub repo/branch/PR creation is not connected yet.
 - Real AWS/Azure deployment is not connected yet.
 - Deployment access verification is local/manual until cloud adapters are added.
+- Local preview generation is template-based. Only Pong currently becomes a playable prototype; other projects receive a static local brief until project-specific generators are added.
 - Agent learning is local prompt memory, not fine-tuning.
 - Uploaded file binaries are not retained after parsing.
 - The purpose guardrail is deterministic and keyword based, so it may need refinement as use cases expand.

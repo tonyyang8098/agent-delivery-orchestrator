@@ -30,6 +30,28 @@ The backend is an in-memory Express API. It owns the active run state, advances 
 
 Use `PROJECT_CONTEXT.md` as the durable project context file for design decisions, current behavior, constraints, and future integration direction.
 
+## Local Preview And Testing
+
+The UI includes a **Preview & smoke checks** workspace section. After starting a run, choose **Build local preview** to generate a deterministic local artifact under:
+
+```text
+local-state/previews/<runId>/index.html
+```
+
+The backend serves generated previews at:
+
+```text
+http://127.0.0.1:3001/local-previews/<runId>/index.html
+```
+
+These preview files are runtime-only and ignored by Git. Generating a preview does not call an LLM, cloud provider, GitHub, or deployment system.
+
+Current preview behavior:
+
+- Pong/table-tennis requests generate a playable local Pong canvas with mouse control, scoring, and restart.
+- Other projects generate a local project brief with baseline, repository, environment promotion, recent handoffs, and smoke-check context.
+- Each preview build records smoke-check results on the active run and adds a `local-test` entry to the decision trace.
+
 ## Requirements Intake
 
 New feature work starts with a named project and a Business Analyst clarification loop:

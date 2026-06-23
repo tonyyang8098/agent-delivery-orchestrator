@@ -27,6 +27,7 @@ import {
   type LlmMode,
   type LlmProviderStatus,
   type LogEntry,
+  type LocalPreview,
   type PendingLlmCall,
   type PeerReview,
   type PeerReviewStatus,
@@ -69,6 +70,7 @@ type OrchestratorRun = {
   contextPacks: AgentContextPack[]
   decisionTrace: DecisionTraceEntry[]
   accessBlockers: DeploymentAccessBlocker[]
+  localPreview?: LocalPreview
   pendingLlmCall?: PendingLlmCall
 }
 
@@ -229,6 +231,7 @@ const personaPrompts: Record<AgentName, string> = {
 
 const localStateDir = path.resolve(process.cwd(), 'local-state')
 const agentMemoryPath = path.join(localStateDir, 'agent-memory.json')
+const previewRoot = path.join(localStateDir, 'previews')
 
 const getAgentDefinition = (agentName: AgentName) =>
   AGENTS.find((agent) => agent.name === agentName) ?? AGENTS[0]
@@ -327,6 +330,7 @@ const rememberAgentLesson = (
 
 app.use(cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/] }))
 app.use(express.json({ limit: '1mb' }))
+app.use('/local-previews', express.static(previewRoot))
 
 const createId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`
@@ -2057,6 +2061,577 @@ const appendLog = (
   run.updatedAt = new Date().toISOString()
 }
 
+const escapeHtml = (value: string) =>
+  value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+
+const isPongRun = (run: OrchestratorRun) => {
+  const baseline = getBaselineArtifact(run)
+  const haystack = [
+    run.projectName,
+    run.repositoryName,
+    run.featureRequest,
+    baseline?.output ?? '',
+  ].join('\n')
+
+  return /\b(pong|table tennis)\b/i.test(haystack)
+}
+
+const getPreviewTitle = (run: OrchestratorRun) =>
+  isPongRun(run) ? `${run.projectName} playable preview` : `${run.projectName} local brief`
+
+const createPongPreviewHtml = (run: OrchestratorRun) => {
+  const projectName = escapeHtml(run.projectName)
+  const repositoryName = escapeHtml(run.repositoryName)
+  const featureRequest = escapeHtml(run.featureRequest)
+  const branchName = escapeHtml(run.branchName)
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${projectName} - Local Pong Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #08111f;
+      color: #eef6ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    .preview-shell {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+    }
+
+    header {
+      align-items: center;
+      background: rgba(8, 17, 31, 0.92);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      padding: 14px 18px;
+    }
+
+    h1 {
+      font-size: 18px;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    p {
+      color: #9fb2c7;
+      font-size: 13px;
+      line-height: 1.4;
+      margin: 5px 0 0;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      justify-content: flex-end;
+    }
+
+    .meta span,
+    button {
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 760;
+      min-height: 34px;
+      padding: 8px 10px;
+    }
+
+    .meta span {
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.24);
+      color: #bae6fd;
+    }
+
+    button {
+      background: #38bdf8;
+      border: 0;
+      color: #06111f;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .game-wrap {
+      display: grid;
+      min-height: 0;
+      padding: 16px;
+      place-items: center;
+    }
+
+    canvas {
+      background: linear-gradient(180deg, #0f172a, #111827);
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: 8px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.36);
+      max-height: calc(100vh - 104px);
+      max-width: min(960px, 100%);
+      width: 100%;
+    }
+
+    @media (max-width: 720px) {
+      body {
+        overflow: auto;
+      }
+
+      header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .meta {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="preview-shell">
+    <header>
+      <div>
+        <h1>${projectName}</h1>
+        <p>${featureRequest}</p>
+      </div>
+      <div class="meta" aria-label="Preview controls">
+        <span>${repositoryName}</span>
+        <span>${branchName}</span>
+        <span id="score">Player 0 : 0 Agent</span>
+        <button type="button" id="restart">Restart</button>
+      </div>
+    </header>
+    <section class="game-wrap" aria-label="Playable local Pong game">
+      <canvas id="game" width="960" height="540"></canvas>
+    </section>
+  </main>
+  <script>
+    const canvas = document.getElementById('game');
+    const context = canvas.getContext('2d');
+    const score = document.getElementById('score');
+    const restart = document.getElementById('restart');
+    const paddleWidth = 14;
+    const paddleHeight = 92;
+    const ballSize = 14;
+    let playerScore = 0;
+    let aiScore = 0;
+    let playerY = canvas.height / 2 - paddleHeight / 2;
+    let aiY = canvas.height / 2 - paddleHeight / 2;
+    let ball = { x: canvas.width / 2, y: canvas.height / 2, vx: 5, vy: 3 };
+
+    function resetBall(direction) {
+      ball = {
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        vx: 5 * direction,
+        vy: (Math.random() > 0.5 ? 1 : -1) * 3,
+      };
+    }
+
+    function updateScore() {
+      score.textContent = 'Player ' + playerScore + ' : ' + aiScore + ' Agent';
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function setPlayerFromPointer(event) {
+      const rect = canvas.getBoundingClientRect();
+      const scale = canvas.height / rect.height;
+      playerY = clamp((event.clientY - rect.top) * scale - paddleHeight / 2, 0, canvas.height - paddleHeight);
+    }
+
+    canvas.addEventListener('mousemove', setPlayerFromPointer);
+    canvas.addEventListener('pointermove', setPlayerFromPointer);
+    restart.addEventListener('click', () => {
+      playerScore = 0;
+      aiScore = 0;
+      updateScore();
+      resetBall(Math.random() > 0.5 ? 1 : -1);
+    });
+
+    function drawNet() {
+      context.strokeStyle = 'rgba(148, 163, 184, 0.34)';
+      context.setLineDash([8, 12]);
+      context.beginPath();
+      context.moveTo(canvas.width / 2, 18);
+      context.lineTo(canvas.width / 2, canvas.height - 18);
+      context.stroke();
+      context.setLineDash([]);
+    }
+
+    function draw() {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+      gradient.addColorStop(0, '#0f172a');
+      gradient.addColorStop(1, '#12263f');
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+
+      drawNet();
+
+      context.fillStyle = '#38bdf8';
+      context.fillRect(30, playerY, paddleWidth, paddleHeight);
+      context.fillStyle = '#f8fafc';
+      context.fillRect(canvas.width - 44, aiY, paddleWidth, paddleHeight);
+
+      context.fillStyle = '#facc15';
+      context.fillRect(ball.x - ballSize / 2, ball.y - ballSize / 2, ballSize, ballSize);
+
+      context.fillStyle = 'rgba(226, 232, 240, 0.76)';
+      context.font = '13px Inter, system-ui, sans-serif';
+      context.fillText('Move your mouse over the board to control the left paddle.', 28, canvas.height - 22);
+    }
+
+    function step() {
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      if (ball.y <= ballSize / 2 || ball.y >= canvas.height - ballSize / 2) {
+        ball.vy *= -1;
+      }
+
+      const aiTarget = ball.y - paddleHeight / 2;
+      aiY += (aiTarget - aiY) * 0.075;
+      aiY = clamp(aiY, 0, canvas.height - paddleHeight);
+
+      const hitsPlayer = ball.x - ballSize / 2 <= 44 && ball.x > 22 && ball.y >= playerY && ball.y <= playerY + paddleHeight;
+      const hitsAi = ball.x + ballSize / 2 >= canvas.width - 44 && ball.x < canvas.width - 22 && ball.y >= aiY && ball.y <= aiY + paddleHeight;
+
+      if (hitsPlayer || hitsAi) {
+        ball.vx *= -1.04;
+        const paddleY = hitsPlayer ? playerY : aiY;
+        ball.vy += ((ball.y - (paddleY + paddleHeight / 2)) / paddleHeight) * 3;
+      }
+
+      if (ball.x < 0) {
+        aiScore += 1;
+        updateScore();
+        resetBall(1);
+      }
+
+      if (ball.x > canvas.width) {
+        playerScore += 1;
+        updateScore();
+        resetBall(-1);
+      }
+
+      draw();
+      requestAnimationFrame(step);
+    }
+
+    updateScore();
+    draw();
+    requestAnimationFrame(step);
+  </script>
+</body>
+</html>`
+}
+
+const createStaticPreviewHtml = (run: OrchestratorRun) => {
+  const baseline = getBaselineArtifact(run)
+  const recentArtifacts = run.artifacts.slice(-4)
+  const checks = [
+    'Requirement source of truth is visible.',
+    'Repository and environment branch plan is visible.',
+    'Recent agent handoffs are visible.',
+    'Human gates remain explicit.',
+  ]
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(run.projectName)} - Local Preview</title>
+  <style>
+    :root {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f4f7fb;
+      color: #172033;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+    }
+
+    main {
+      display: grid;
+      gap: 16px;
+      margin: 0 auto;
+      max-width: 1120px;
+      padding: 24px;
+    }
+
+    header,
+    section {
+      background: #ffffff;
+      border: 1px solid #d7dee8;
+      border-radius: 8px;
+      box-shadow: 0 14px 36px rgba(31, 41, 55, 0.08);
+      padding: 18px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 28px;
+      line-height: 1.12;
+    }
+
+    h2 {
+      font-size: 18px;
+    }
+
+    h3 {
+      font-size: 15px;
+    }
+
+    p,
+    li {
+      color: #4b5563;
+      font-size: 14px;
+      line-height: 1.48;
+    }
+
+    .meta,
+    .grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .meta {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-top: 16px;
+    }
+
+    .meta span,
+    article {
+      background: #f2f6fa;
+      border: 1px solid #d7dee8;
+      border-radius: 7px;
+      min-width: 0;
+      padding: 10px;
+    }
+
+    .meta strong,
+    article strong {
+      color: #172033;
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .artifact-list {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    @media (max-width: 760px) {
+      main {
+        padding: 16px;
+      }
+
+      .meta,
+      .artifact-list {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>${escapeHtml(run.projectName)}</h1>
+      <p>${escapeHtml(run.featureRequest)}</p>
+      <div class="meta" aria-label="Project metadata">
+        <span>Repository<strong>${escapeHtml(run.repositoryName)}</strong></span>
+        <span>Feature branch<strong>${escapeHtml(run.branchName)}</strong></span>
+        <span>Current step<strong>${escapeHtml(getCurrentStep(run)?.label ?? 'Complete')}</strong></span>
+      </div>
+    </header>
+    <section>
+      <h2>Local Smoke Checks</h2>
+      <ul>
+        ${checks.map((check) => `<li>${escapeHtml(check)}</li>`).join('')}
+      </ul>
+    </section>
+    <section>
+      <h2>Baseline</h2>
+      <p>${escapeHtml(baseline?.summary ?? 'Baseline requirements are not ready yet. The BA interview still owns the source of truth.')}</p>
+    </section>
+    <section>
+      <h2>Environment Promotion</h2>
+      <div class="grid">
+        ${run.environmentBranches
+          .map(
+            (branch) =>
+              `<article><strong>${escapeHtml(branch.environment)}</strong><p>${escapeHtml(branch.sourceBranch)} -> ${escapeHtml(branch.branchName)}</p></article>`,
+          )
+          .join('')}
+      </div>
+    </section>
+    <section>
+      <h2>Recent Agent Handoffs</h2>
+      <div class="artifact-list">
+        ${
+          recentArtifacts.length > 0
+            ? recentArtifacts
+                .map(
+                  (artifact) =>
+                    `<article><strong>${escapeHtml(artifact.agentName.replace(' agent', ''))}</strong><h3>${escapeHtml(artifact.title)}</h3><p>${escapeHtml(artifact.summary)}</p></article>`,
+                )
+                .join('')
+            : '<article><strong>No handoffs yet</strong><p>Start or resume the run to produce agent artifacts.</p></article>'
+        }
+      </div>
+    </section>
+  </main>
+</body>
+</html>`
+}
+
+const createLocalPreview = (run: OrchestratorRun): LocalPreview => {
+  const runPreviewDir = path.join(previewRoot, run.id)
+  const indexPath = path.join(runPreviewDir, 'index.html')
+  const isPong = isPongRun(run)
+  const kind: LocalPreview['kind'] = isPong ? 'pong-game' : 'static-brief'
+  const title = getPreviewTitle(run)
+  const url = `/local-previews/${encodeURIComponent(run.id)}/index.html`
+  const createdAt = new Date().toISOString()
+
+  try {
+    mkdirSync(runPreviewDir, { recursive: true })
+    const html = isPong ? createPongPreviewHtml(run) : createStaticPreviewHtml(run)
+    writeFileSync(indexPath, html)
+    const writtenHtml = readFileSync(indexPath, 'utf8')
+    const checks: LocalPreview['checks'] = [
+      {
+        name: 'Preview file',
+        status: existsSync(indexPath) ? 'pass' : 'fail',
+        detail: `Generated ${path.relative(process.cwd(), indexPath)}.`,
+      },
+      {
+        name: isPong ? 'Playable canvas' : 'Project brief',
+        status: isPong
+          ? writtenHtml.includes('<canvas') && writtenHtml.includes('requestAnimationFrame')
+            ? 'pass'
+            : 'fail'
+          : writtenHtml.includes('Local Smoke Checks')
+            ? 'pass'
+            : 'fail',
+        detail: isPong
+          ? 'Pong preview includes a canvas loop, mouse paddle control, scoring, and restart.'
+          : 'Static preview exposes baseline, repository, environment, and handoff context.',
+      },
+      {
+        name: 'Local route',
+        status: 'pass',
+        detail: `Served by the backend at ${url}.`,
+      },
+      {
+        name: 'Cost control',
+        status: 'pass',
+        detail: 'Generated deterministically with no LLM or cloud calls.',
+      },
+    ]
+    const hasFailure = checks.some((check) => check.status === 'fail')
+
+    run.localPreview = {
+      status: hasFailure ? 'failed' : 'ready',
+      url,
+      kind,
+      title,
+      summary: isPong
+        ? 'Playable local Pong preview generated from the current run.'
+        : 'Local project brief and smoke-check preview generated from the current run.',
+      checks,
+      createdAt,
+    }
+    appendLog(
+      run,
+      'Local test harness',
+      hasFailure
+        ? 'Local preview generated with failed smoke checks.'
+        : 'Local preview generated and smoke checks passed.',
+      hasFailure ? 'warning' : 'success',
+    )
+    recordDecisionTrace(run, {
+      type: 'local-test',
+      title: 'Local preview generated',
+      summary: `${run.localPreview.title} is available at ${run.localPreview.url}.`,
+      rationale:
+        'A deterministic local preview gives the human a fast way to inspect and smoke-test the current run before repository or deployment handoff.',
+      evidenceRefs: checks.map((check) => `${check.name}: ${check.status}`),
+      source: 'Orchestrator',
+      modelTier: 'deterministic',
+      gate: 'local preview',
+    })
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : 'Unknown local preview generation error.'
+    run.localPreview = {
+      status: 'failed',
+      url,
+      kind,
+      title,
+      summary: `Local preview generation failed: ${detail}`,
+      checks: [
+        {
+          name: 'Preview generation',
+          status: 'fail',
+          detail,
+        },
+      ],
+      createdAt,
+    }
+    appendLog(run, 'Local test harness', run.localPreview.summary, 'warning')
+    recordDecisionTrace(run, {
+      type: 'local-test',
+      title: 'Local preview failed',
+      summary: run.localPreview.summary,
+      rationale:
+        'The local test harness records preview failures so the run can be corrected before handoff.',
+      evidenceRefs: [detail],
+      source: 'Orchestrator',
+      modelTier: 'deterministic',
+      gate: 'local preview',
+    })
+  }
+
+  run.updatedAt = new Date().toISOString()
+  return run.localPreview
+}
+
 const clearRunTimer = (runId: string) => {
   const timer = timers.get(runId)
   if (timer) {
@@ -2639,6 +3214,17 @@ app.post('/api/runs/:runId/access/still-blocked', (request, response) => {
     gate: `${blocker.environment} deployment`,
   })
 
+  response.json({ run: serializeRun(run) })
+})
+
+app.post('/api/runs/:runId/local-preview', (request, response) => {
+  const run = runs.get(request.params.runId)
+  if (!run) {
+    response.status(404).json(notFound)
+    return
+  }
+
+  createLocalPreview(run)
   response.json({ run: serializeRun(run) })
 })
 

@@ -11,6 +11,7 @@ import {
   Circle,
   ClipboardCheck,
   Code2,
+  ExternalLink,
   FileCheck2,
   FileText,
   GitBranch,
@@ -18,6 +19,7 @@ import {
   GitPullRequest,
   LockKeyhole,
   MessageSquareText,
+  MonitorPlay,
   Pause,
   Play,
   RefreshCcw,
@@ -47,6 +49,7 @@ import {
   type GateType,
   type LlmProviderStatus,
   type LogEntry,
+  type LocalPreview,
   type PendingLlmCall,
   type PeerReview,
   type RequirementsState,
@@ -100,6 +103,7 @@ type OrchestratorRun = {
   decisionTrace: DecisionTraceEntry[]
   agentMemory: AgentMemory[]
   contextFiles: UploadedContextFile[]
+  localPreview?: LocalPreview
   llmProvider: LlmProviderStatus
   pendingLlmCall?: PendingLlmCall
 }
@@ -266,6 +270,10 @@ function App() {
   const artifacts = run?.artifacts ?? []
   const peerReviews = run?.peerReviews ?? []
   const contextFiles = run?.contextFiles ?? []
+  const localPreview = run?.localPreview
+  const localPreviewUrl = localPreview?.url
+    ? `${API_BASE_URL}${localPreview.url}`
+    : ''
   const contextSummary = run?.contextSummary
   const contextPacks = run?.contextPacks ?? []
   const decisionTrace = run?.decisionTrace ?? []
@@ -465,6 +473,16 @@ function App() {
         body: JSON.stringify({
           evidence: `${activeAccessBlocker.environment} access remains unresolved.`,
         }),
+      }),
+    )
+  }
+
+  const buildLocalPreview = () => {
+    if (!run) return
+
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/local-preview`, {
+        method: 'POST',
       }),
     )
   }
@@ -703,7 +721,27 @@ function App() {
         </div>
       </section>
 
-      <section className="request-panel" aria-label="Feature request">
+      <section className="workspace-nav" aria-label="Workspace navigation">
+        <div className="nav-current">
+          <p className="eyebrow">Workspace</p>
+          <strong>{runStarted ? run?.projectName : 'Draft project'}</strong>
+          <span>{currentStep?.label ?? (isComplete ? 'Complete' : 'Ready for intake')}</span>
+        </div>
+        <nav className="nav-links" aria-label="Primary workflow sections">
+          <a href="#request">Request</a>
+          <a href="#preview-test">Preview & test</a>
+          <a href="#requirements">Requirements</a>
+          <a href="#workflow">Workflow</a>
+          <a href="#release">Release</a>
+          <a href="#intelligence">Intelligence</a>
+        </nav>
+        <div className="nav-status">
+          <span>{localPreview?.status === 'ready' ? 'Preview ready' : 'Preview not built'}</span>
+          <strong>{progress}%</strong>
+        </div>
+      </section>
+
+      <section id="request" className="request-panel" aria-label="Feature request">
         <div className="request-copy">
           <div className="project-fields">
             <label htmlFor="project-name">Project name</label>
@@ -810,6 +848,109 @@ function App() {
         </div>
       </section>
 
+      <section id="preview-test" className="preview-test-panel" aria-label="Local preview and smoke tests">
+        <div className="section-heading compact">
+          <div>
+            <p className="eyebrow">Local testing</p>
+            <h2>
+              <MonitorPlay size={20} />
+              Preview & smoke checks
+            </h2>
+          </div>
+          <span
+            className={`status-pill ${
+              localPreview?.status === 'ready'
+                ? 'success'
+                : localPreview?.status === 'failed'
+                  ? 'warning'
+                  : ''
+            }`}
+          >
+            {localPreview?.status === 'ready'
+              ? 'Ready'
+              : localPreview?.status === 'failed'
+                ? 'Needs attention'
+                : 'Not built'}
+          </span>
+        </div>
+
+        <div className="preview-layout">
+          <div className="preview-copy">
+            <h3>{localPreview?.title ?? 'Generate a local prototype from this run'}</h3>
+            <p>
+              {localPreview?.summary ??
+                'Build a deterministic local preview from the active run and attach smoke-check evidence before repository or deployment handoff.'}
+            </p>
+            <div className="preview-actions">
+              <button
+                type="button"
+                className="primary-action"
+                onClick={buildLocalPreview}
+                disabled={!run || isSubmitting}
+              >
+                <MonitorPlay size={17} />
+                {localPreview ? 'Rebuild local preview' : 'Build local preview'}
+              </button>
+              {localPreviewUrl ? (
+                <a
+                  className="preview-link"
+                  href={localPreviewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink size={16} />
+                  Open full screen
+                </a>
+              ) : null}
+            </div>
+
+            <div className="preview-check-list" aria-label="Local smoke checks">
+              {localPreview?.checks.length ? (
+                localPreview.checks.map((check) => {
+                  const CheckIcon = check.status === 'pass' ? CheckCircle2 : AlertTriangle
+                  return (
+                    <article className={`preview-check-row ${check.status}`} key={check.name}>
+                      <CheckIcon size={17} />
+                      <div>
+                        <strong>{check.name}</strong>
+                        <p>{check.detail}</p>
+                      </div>
+                    </article>
+                  )
+                })
+              ) : (
+                <article className="preview-check-row warning">
+                  <AlertTriangle size={17} />
+                  <div>
+                    <strong>No local preview yet</strong>
+                    <p>Start a run, then build a local preview to create smoke-check evidence.</p>
+                  </div>
+                </article>
+              )}
+            </div>
+          </div>
+
+          <div className="preview-frame-shell">
+            {localPreviewUrl && localPreview?.status === 'ready' ? (
+              <iframe
+                className="preview-frame"
+                title={`${localPreview.title} local preview`}
+                src={localPreviewUrl}
+              />
+            ) : (
+              <div className="preview-empty">
+                <MonitorPlay size={24} />
+                <strong>Local preview appears here</strong>
+                <span>
+                  Pong requests become a playable game. Other projects get a local brief with
+                  release and smoke-check context.
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
       {pendingLlmCall ? (
         <section className="cost-panel" aria-label="LLM cost approval">
           <div className="section-heading compact">
@@ -868,7 +1009,7 @@ function App() {
         </section>
       ) : null}
 
-      <section className="requirements-panel" aria-label="Requirements chat">
+      <section id="requirements" className="requirements-panel" aria-label="Requirements chat">
         <div className="section-heading compact">
           <div>
             <p className="eyebrow">BA requirements chat</p>
@@ -946,7 +1087,7 @@ function App() {
       </section>
 
       <section className="workspace-grid">
-        <section className="workflow-panel" aria-label="Workflow">
+        <section id="workflow" className="workflow-panel" aria-label="Workflow">
           <div className="section-heading">
             <div>
               <p className="eyebrow">Pipeline</p>
@@ -1136,7 +1277,7 @@ function App() {
         </aside>
       </section>
 
-      <section className="operations-grid">
+      <section id="release" className="operations-grid">
         <section className="repo-panel">
           <div className="section-heading compact">
             <div>
@@ -1237,7 +1378,7 @@ function App() {
           </div>
         </section>
 
-        <section className="context-engine-panel">
+        <section id="intelligence" className="context-engine-panel">
           <div className="section-heading compact">
             <div>
               <p className="eyebrow">Context engine</p>
