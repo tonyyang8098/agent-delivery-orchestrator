@@ -44,6 +44,13 @@ After the baseline exists, the BA chat stays open. The user can ask the BA to ex
 
 The active baseline is treated as the shared context file for the team. Each downstream agent receives it as `baseline-requirements.md` when producing architecture, user stories, implementation, QA, repository, or deployment handoffs. Developer handoff and build work stay blocked until the parallel design/story gate completes.
 
+The intake form also accepts context files when starting a run:
+
+- Requirement documents: `.txt`, `.md`, `.docx`
+- Sample datasets: `.csv`, `.xlsx`
+
+Uploads are parsed in memory by the local backend. Requirement documents are converted into extracted text context, and datasets are converted into row/column summaries plus a small preview. The extracted context is included in BA clarification, baseline generation, architecture design, user stories, and downstream handoffs. Uploaded file binaries are not written to disk or committed to Git.
+
 The requirements chat is persisted in the active in-memory run and is exposed through:
 
 ```text
@@ -81,6 +88,8 @@ OPENAI_API_KEY=your_api_key_here
 OPENAI_MODEL=gpt-4.1-mini
 LLM_REQUIRE_APPROVAL=true
 LLM_MAX_OUTPUT_TOKENS=300
+CONTEXT_FILE_LIMIT=6
+CONTEXT_FILE_MAX_BYTES=5242880
 ```
 
 When `OPENAI_API_KEY` is present, each workflow step calls the OpenAI Responses API with the persona assigned to that step:

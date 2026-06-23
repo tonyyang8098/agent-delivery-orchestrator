@@ -267,6 +267,60 @@ button:not(:disabled):active {
   margin-bottom: 8px;
 }
 
+.context-upload {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.context-upload input[type='file'] {
+  background: #fbfcf8;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-sizing: border-box;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 9px;
+  width: 100%;
+}
+
+.context-upload input[type='file']:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.context-file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.context-file-list span {
+  align-items: center;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 999px;
+  color: var(--text-strong);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 720;
+  gap: 5px;
+  max-width: 100%;
+  padding: 5px 8px;
+}
+
+.context-file-list.attached span {
+  background: rgba(21, 128, 61, 0.1);
+  border-color: rgba(21, 128, 61, 0.18);
+}
+
+.context-file-list strong {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
 textarea {
   background: #fbfcf8;
   border: 1px solid var(--border);

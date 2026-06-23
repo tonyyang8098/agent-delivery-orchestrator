@@ -45,6 +45,7 @@ import {
   type PeerReview,
   type RequirementsState,
   type StepState,
+  type UploadedContextFile,
   type WorkflowStep,
 } from './orchestratorModel'
 import './App.css'
@@ -82,6 +83,7 @@ type OrchestratorRun = {
   artifacts: AgentArtifact[]
   peerReviews: PeerReview[]
   agentMemory: AgentMemory[]
+  contextFiles: UploadedContextFile[]
   llmProvider: LlmProviderStatus
   pendingLlmCall?: PendingLlmCall
 }
@@ -147,11 +149,18 @@ const readinessChecks: Array<[string, string, LucideIcon]> = [
   ['Pull request', 'pull-request', GitPullRequest],
 ]
 
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 const requestApi = async <T,>(path: string, options: RequestInit = {}) => {
+  const isFormData = options.body instanceof FormData
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...options.headers,
     },
   })
@@ -173,6 +182,7 @@ function App() {
   const [apiError, setApiError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [requirementAnswer, setRequirementAnswer] = useState('')
+  const [selectedContextFiles, setSelectedContextFiles] = useState<File[]>([])
   const [llmProvider, setLlmProvider] = useState<LlmProviderStatus>({
     mode: 'mock',
     model: 'mock-local-persona',
@@ -196,11 +206,13 @@ function App() {
   const logEntries = run?.logEntries ?? defaultLogEntries
   const artifacts = run?.artifacts ?? []
   const peerReviews = run?.peerReviews ?? []
+  const contextFiles = run?.contextFiles ?? []
   const pendingLlmCall = run?.pendingLlmCall
   const requirementMessages = run?.requirements.messages ?? []
   const baselineRequirement = run?.requirements.baselineArtifactId
     ? artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
     : undefined
+  const hasRunInput = Boolean(featureRequest.trim() || selectedContextFiles.length > 0)
   const canSendRequirementMessage =
     runStarted && apiStatus === 'online' && !isSubmitting && !waitingForLlmApproval
 
@@ -249,7 +261,10 @@ function App() {
     setRun(response.run)
     if (response.run?.llmProvider) setLlmProvider(response.run.llmProvider)
     if (response.run?.agentMemory) setAgentMemory(response.run.agentMemory)
-    if (response.run) setFeatureRequest(response.run.featureRequest)
+    if (response.run) {
+      setFeatureRequest(response.run.featureRequest)
+      setSelectedContextFiles([])
+    }
     setApiError(null)
   }
 
@@ -279,12 +294,18 @@ function App() {
 
   const startRun = () => {
     const trimmedRequest = featureRequest.trim()
-    if (!trimmedRequest) return
+    if (!trimmedRequest && selectedContextFiles.length === 0) return
+
+    const body = new FormData()
+    body.append('featureRequest', trimmedRequest)
+    selectedContextFiles.forEach((file) => {
+      body.append('contextFiles', file)
+    })
 
     void mutateRun(() =>
       requestApi<RunResponse>('/api/runs', {
         method: 'POST',
-        body: JSON.stringify({ featureRequest: trimmedRequest }),
+        body,
       }),
     )
   }
@@ -326,6 +347,7 @@ function App() {
     if (!run) {
       setFeatureRequest(defaultRequest)
       setApiError(null)
+      setSelectedContextFiles([])
       return
     }
 
@@ -429,7 +451,7 @@ function App() {
             className="primary-action"
             onClick={runStarted ? toggleRunning : startRun}
             disabled={
-              !featureRequest.trim() ||
+              !hasRunInput ||
               isComplete ||
               isWaiting ||
               apiStatus !== 'online' ||
@@ -472,6 +494,45 @@ function App() {
             spellCheck="true"
             disabled={runStarted && !isComplete}
           />
+          <div className="context-upload">
+            <label htmlFor="context-files">Requirement and sample data files</label>
+            <input
+              id="context-files"
+              type="file"
+              multiple
+              accept=".txt,.md,.markdown,.docx,.csv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(event) =>
+                setSelectedContextFiles(Array.from(event.target.files ?? []))
+              }
+              disabled={runStarted && !isComplete}
+            />
+            {selectedContextFiles.length > 0 ? (
+              <div className="context-file-list" aria-label="Selected context files">
+                {selectedContextFiles.map((file) => (
+                  <span key={`${file.name}-${file.size}`}>
+                    <FileText size={14} />
+                    {file.name}
+                    <strong>{formatBytes(file.size)}</strong>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {contextFiles.length > 0 ? (
+              <div className="context-file-list attached" aria-label="Attached context files">
+                {contextFiles.map((file) => (
+                  <span key={file.id}>
+                    <FileText size={14} />
+                    {file.name}
+                    <strong>
+                      {file.kind === 'sample-data'
+                        ? `${file.rowCount ?? 0} rows`
+                        : formatBytes(file.size)}
+                    </strong>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
           {apiError ? (
             <p className="api-error" role="status">
               <AlertTriangle size={16} />

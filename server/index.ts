@@ -1,9 +1,12 @@
 import 'dotenv/config'
 import cors from 'cors'
 import express from 'express'
+import mammoth from 'mammoth'
+import multer from 'multer'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import OpenAI from 'openai'
+import { readSheet } from 'read-excel-file/node'
 import {
   AGENTS,
   ENVIRONMENTS,
@@ -21,6 +24,8 @@ import {
   type RequirementChatMessage,
   type RequirementsState,
   type Tone,
+  type UploadedContextFile,
+  type UploadedContextKind,
   type WorkflowStep,
 } from '../src/orchestratorModel.ts'
 
@@ -46,6 +51,7 @@ type OrchestratorRun = {
   logEntries: LogEntry[]
   artifacts: AgentArtifact[]
   peerReviews: PeerReview[]
+  contextFiles: UploadedContextFile[]
   pendingLlmCall?: PendingLlmCall
 }
 
@@ -62,10 +68,20 @@ const openaiModel = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini'
 const openaiClient = process.env.OPENAI_API_KEY ? new OpenAI() : null
 const requireLlmApproval = process.env.LLM_REQUIRE_APPROVAL !== 'false'
 const llmMaxOutputTokens = parsePositiveInteger(process.env.LLM_MAX_OUTPUT_TOKENS, 300)
+const maxContextFiles = parsePositiveInteger(process.env.CONTEXT_FILE_LIMIT, 6)
+const maxContextFileBytes = parsePositiveInteger(process.env.CONTEXT_FILE_MAX_BYTES, 5 * 1024 * 1024)
 
 const modelPricingUsdPerMillion: Record<string, { input: number; output: number }> = {
   'gpt-4.1-mini': { input: 0.4, output: 1.6 },
 }
+
+const contextUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    files: maxContextFiles,
+    fileSize: maxContextFileBytes,
+  },
+})
 
 const runs = new Map<string, OrchestratorRun>()
 const timers = new Map<string, NodeJS.Timeout>()
@@ -218,6 +234,158 @@ const makeRequirementMessage = (
   createdAt: new Date().toISOString(),
 })
 
+const normalizeText = (value: string) =>
+  value
+    .replace(/\r\n/g, '\n')
+    .replace(/\t/g, ' ')
+    .replace(/[^\S\n]+/g, ' ')
+    .trim()
+
+const truncateText = (value: string, limit = 6000) => {
+  const normalized = normalizeText(value)
+  return normalized.length > limit
+    ? `${normalized.slice(0, limit).trim()}\n\n[Truncated to ${limit} characters for local context.]`
+    : normalized
+}
+
+const fileExtension = (filename: string) =>
+  path.extname(filename).toLowerCase().replace('.', '')
+
+const getContextKind = (filename: string): UploadedContextKind | null => {
+  const extension = fileExtension(filename)
+  if (['txt', 'md', 'markdown', 'docx'].includes(extension)) return 'requirements'
+  if (['csv', 'xlsx'].includes(extension)) return 'sample-data'
+  return null
+}
+
+const parseCsvRows = (value: string) => {
+  const rows: string[][] = []
+  let current = ''
+  let row: string[] = []
+  let inQuotes = false
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]
+    const next = value[index + 1]
+
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"'
+      index += 1
+      continue
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes
+      continue
+    }
+
+    if (char === ',' && !inQuotes) {
+      row.push(current.trim())
+      current = ''
+      continue
+    }
+
+    if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') index += 1
+      row.push(current.trim())
+      if (row.some(Boolean)) rows.push(row)
+      row = []
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  row.push(current.trim())
+  if (row.some(Boolean)) rows.push(row)
+  return rows
+}
+
+const rowsToPreview = (rows: unknown[][], limit = 6) =>
+  rows
+    .slice(0, limit)
+    .map((row) => row.map((cell) => String(cell ?? '')).join(' | '))
+    .join('\n')
+
+const summarizeTabularContext = (
+  filename: string,
+  mimeType: string,
+  size: number,
+  rows: unknown[][],
+): UploadedContextFile => {
+  const header = rows[0]?.map((cell) => String(cell ?? '').trim()).filter(Boolean) ?? []
+  const dataRows = rows.slice(header.length > 0 ? 1 : 0)
+  const preview = rowsToPreview(rows)
+  const extractedText = truncateText(
+    [
+      `Sample data file: ${filename}`,
+      header.length > 0 ? `Columns: ${header.join(', ')}` : 'Columns: not detected',
+      `Rows detected: ${dataRows.length}`,
+      '',
+      'Preview:',
+      preview || 'No preview rows detected.',
+    ].join('\n'),
+  )
+
+  return {
+    id: createId(),
+    name: filename,
+    kind: 'sample-data',
+    mimeType,
+    size,
+    summary: `${filename}: ${dataRows.length} rows, ${header.length} columns.`,
+    extractedText,
+    rowCount: dataRows.length,
+    columns: header,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+const parseUploadedContextFile = async (
+  file: Express.Multer.File,
+): Promise<UploadedContextFile> => {
+  const kind = getContextKind(file.originalname)
+  if (!kind) {
+    throw new Error(
+      `${file.originalname} is not supported. Upload .txt, .md, .docx, .csv, or .xlsx files.`,
+    )
+  }
+
+  const extension = fileExtension(file.originalname)
+
+  if (kind === 'requirements') {
+    const rawText =
+      extension === 'docx'
+        ? (await mammoth.extractRawText({ buffer: file.buffer })).value
+        : file.buffer.toString('utf8')
+    const extractedText = truncateText(rawText)
+
+    return {
+      id: createId(),
+      name: file.originalname,
+      kind,
+      mimeType: file.mimetype,
+      size: file.size,
+      summary: `${file.originalname}: ${firstSentence(extractedText) || 'Requirement text extracted.'}`,
+      extractedText,
+      createdAt: new Date().toISOString(),
+    }
+  }
+
+  if (extension === 'csv') {
+    const rows = parseCsvRows(file.buffer.toString('utf8'))
+    return summarizeTabularContext(file.originalname, file.mimetype, file.size, rows)
+  }
+
+  const rows = await readSheet(file.buffer)
+  return summarizeTabularContext(file.originalname, file.mimetype, file.size, rows)
+}
+
+const parseUploadedContextFiles = async (
+  files: Express.Multer.File[] = [],
+) => Promise.all(files.map((file) => parseUploadedContextFile(file)))
+
 const getLlmProvider = (): LlmProviderStatus => ({
   mode: openaiClient ? 'openai' : 'mock',
   model: openaiClient ? openaiModel : 'mock-local-persona',
@@ -325,6 +493,14 @@ const buildMockRequirementsDocument = (run: OrchestratorRun) => {
     .slice(4)
     .map((message, index) => `${index + 1}. ${message.content}`)
     .join('\n')
+  const requirementContext = run.contextFiles
+    .filter((file) => file.kind === 'requirements')
+    .map((file) => `- ${file.name}: ${file.summary}`)
+    .join('\n')
+  const sampleDataContext = run.contextFiles
+    .filter((file) => file.kind === 'sample-data')
+    .map((file) => `- ${file.name}: ${file.summary}`)
+    .join('\n')
 
   return [
     '# Baseline Requirements Document',
@@ -335,6 +511,20 @@ const buildMockRequirementsDocument = (run: OrchestratorRun) => {
     '## User And Business Context',
     answers || 'Captured through the BA clarification chat.',
     '',
+    ...(requirementContext
+      ? [
+          '## Uploaded Requirement Context',
+          requirementContext,
+          '',
+        ]
+      : []),
+    ...(sampleDataContext
+      ? [
+          '## Uploaded Sample Data Context',
+          sampleDataContext,
+          '',
+        ]
+      : []),
     ...(changeRequests
       ? [
           '## Scope Changes And Revisions',
@@ -395,6 +585,30 @@ const getBaselineContextFile = (run: OrchestratorRun) => {
   ].join('\n')
 }
 
+const getUploadedContextFiles = (run: OrchestratorRun) => {
+  if (run.contextFiles.length === 0) {
+    return 'Uploaded context files: none'
+  }
+
+  return [
+    'Uploaded context files:',
+    ...run.contextFiles.map((file) =>
+      [
+        `Context file: ${file.name}`,
+        `Kind: ${file.kind}`,
+        `Summary: ${file.summary}`,
+        file.columns?.length ? `Columns: ${file.columns.join(', ')}` : '',
+        typeof file.rowCount === 'number' ? `Rows: ${file.rowCount}` : '',
+        '```text',
+        file.extractedText,
+        '```',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    ),
+  ].join('\n\n')
+}
+
 const getRecentPeerReviewContext = (run: OrchestratorRun) => {
   const reviews = run.peerReviews
     .slice(-8)
@@ -418,6 +632,8 @@ const buildBaRequirementInput = (run: OrchestratorRun) => {
     currentBaseline
       ? `Current baseline requirements document:\n${currentBaseline.output}`
       : 'Current baseline requirements document: none yet.',
+    '',
+    getUploadedContextFiles(run),
     '',
     'Requirement interview transcript:',
     transcript || 'No transcript yet.',
@@ -647,6 +863,8 @@ const buildAgentInput = (
     '',
     getBaselineContextFile(run),
     '',
+    getUploadedContextFiles(run),
+    '',
     'Agent memory:',
     memory.learnedPatterns.map((lesson) => `- ${lesson}`).join('\n'),
     '',
@@ -672,6 +890,10 @@ const createMockArtifact = (
   const agent = getAgentDefinition(agentName)
   const baseline = getBaselineArtifact(run)
   const memory = getAgentMemory(agentName)
+  const uploadedContext =
+    run.contextFiles.length > 0
+      ? `Attached context: ${run.contextFiles.map((file) => file.name).join(', ')}.`
+      : 'No attached context files were supplied.'
   const output = [
     `### Deliverable`,
     `${persona} prepared the local handoff for ${step.label.toLowerCase()} against "${run.featureRequest}".`,
@@ -680,6 +902,7 @@ const createMockArtifact = (
     baseline
       ? `Used baseline-requirements.md from ${baseline.title} as the shared context file.`
       : `Used the feature request as context because the baseline document is not ready yet.`,
+    uploadedContext,
     `Specialist lens: ${agent.specialization}`,
     `The workflow advanced through ${step.environment} with simulated evidence for ${step.agents.join(', ')}.`,
     `Recent memory: ${memory.learnedPatterns[0] ?? 'No learned patterns yet.'}`,
@@ -1117,26 +1340,48 @@ app.get('/api/runs/:runId', (request, response) => {
   response.json({ run: serializeRun(run) })
 })
 
-app.post('/api/runs', async (request, response) => {
+app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), async (request, response) => {
   const featureRequest =
     typeof request.body?.featureRequest === 'string'
       ? request.body.featureRequest.trim()
       : ''
 
-  if (!featureRequest) {
-    response.status(400).json({ error: 'featureRequest is required.' })
+  let parsedContextFiles: UploadedContextFile[]
+  try {
+    parsedContextFiles = await parseUploadedContextFiles(
+      (request.files as Express.Multer.File[] | undefined) ?? [],
+    )
+  } catch (error) {
+    response.status(400).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Unable to parse uploaded context files.',
+    })
+    return
+  }
+
+  const contextFiles = parsedContextFiles
+  const derivedFeatureRequest =
+    featureRequest ||
+    contextFiles.find((file) => file.kind === 'requirements')?.summary ||
+    contextFiles[0]?.summary ||
+    ''
+
+  if (!derivedFeatureRequest) {
+    response.status(400).json({ error: 'featureRequest or a supported context file is required.' })
     return
   }
 
   if (activeRunId) clearRunTimer(activeRunId)
 
-  const slug = slugify(featureRequest) || 'new-local-work-item'
+  const slug = slugify(derivedFeatureRequest) || 'new-local-work-item'
   const run: OrchestratorRun = {
     id: createId(),
-    featureRequest,
+    featureRequest: derivedFeatureRequest,
     requirements: {
       status: 'clarifying',
-      messages: [makeRequirementMessage('user', featureRequest)],
+      messages: [makeRequirementMessage('user', derivedFeatureRequest)],
     },
     branchName: `feature/${slug}`,
     currentStepIndex: 0,
@@ -1147,13 +1392,23 @@ app.post('/api/runs', async (request, response) => {
     updatedAt: new Date().toISOString(),
     artifacts: [],
     peerReviews: [],
+    contextFiles,
     logEntries: [
-      makeLogEntry('User request', featureRequest),
+      makeLogEntry('User request', derivedFeatureRequest),
       makeLogEntry(
         'Orchestrator',
         'Run started. Business analyst agent is gathering requirements.',
         'success',
       ),
+      ...(contextFiles.length > 0
+        ? [
+            makeLogEntry(
+              'Context upload',
+              `${contextFiles.length} context file${contextFiles.length === 1 ? '' : 's'} attached to the run.`,
+              'success',
+            ),
+          ]
+        : []),
     ],
   }
 
@@ -1337,6 +1592,27 @@ app.post('/api/runs/:runId/approvals/:gate', (request, response) => {
 
   response.status(400).json({ error: 'Unsupported approval gate.' })
 })
+
+app.use(
+  (
+    error: unknown,
+    _request: express.Request,
+    response: express.Response,
+    next: express.NextFunction,
+  ) => {
+    if (error instanceof multer.MulterError) {
+      response.status(400).json({
+        error:
+          error.code === 'LIMIT_FILE_SIZE'
+            ? `Each context file must be ${Math.round(maxContextFileBytes / 1024 / 1024)} MB or smaller.`
+            : `Context upload failed: ${error.message}`,
+      })
+      return
+    }
+
+    next(error)
+  },
+)
 
 app.listen(port, host, () => {
   console.log(`Agent orchestrator API listening on http://${host}:${port}`)

@@ -17,14 +17,18 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "lucide-react": "^1.21.0",
+    "mammoth": "^1.12.0",
+    "multer": "^2.2.0",
     "openai": "^6.44.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "read-excel-file": "^9.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

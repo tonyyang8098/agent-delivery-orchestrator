@@ -56,6 +56,21 @@ export type AgentArtifact = {
   createdAt: string
 }
 
+export type UploadedContextKind = 'requirements' | 'sample-data'
+
+export type UploadedContextFile = {
+  id: string
+  name: string
+  kind: UploadedContextKind
+  mimeType: string
+  size: number
+  summary: string
+  extractedText: string
+  rowCount?: number
+  columns?: string[]
+  createdAt: string
+}
+
 export type PeerReviewStatus = 'approved' | 'watch' | 'changes-requested'
 
 export type PeerReview = {
