@@ -18,7 +18,7 @@ The tool is purpose-bound to software delivery work. It should not behave like a
 - Local runtime memory: `local-state/agent-memory.json`, ignored by Git.
 - LLM provider: per-agent routing across local OpenAI-compatible endpoints, OpenAI, or mock output.
 - Local model plan: Software uses `Qwen3-Coder-Next`; Business analyst, Architect, Tester, and DevOps use `Qwen3.6-27B` when local hardware can run it; `Phi-4-mini-instruct` is the cheap/light local fallback.
-- Paid fallback model: `gpt-4.1-mini`, enabled only when an agent is explicitly routed to OpenAI and `OPENAI_API_KEY` is present.
+- Paid fallback model: `gpt-5.4-mini`, enabled only when an agent is explicitly routed to OpenAI and `OPENAI_API_KEY` is present.
 - Cost control: every paid OpenAI call pauses for explicit user approval unless `LLM_REQUIRE_APPROVAL=false`. Local Ollama/vLLM calls are treated as local `$0` compute.
 
 ## Agent Team
@@ -124,7 +124,7 @@ User preference for this project:
 - Use `Qwen3-Coder-Next` for the Software agent.
 - Use `Qwen3.6-27B` for BA, Architect, Tester, and DevOps when local hardware can run it.
 - Use `Phi-4-mini-instruct` as the cheap/light local fallback.
-- Keep `gpt-4.1-mini` as the approved paid fallback for hard cases.
+- Keep `gpt-5.4-mini` as the approved paid fallback for hard cases.
 - Be cost efficient.
 - Before any paid LLM call, show the estimated model, input tokens, max output tokens, and estimated cost.
 - Do not approve or run paid LLM calls unless the user explicitly approves.

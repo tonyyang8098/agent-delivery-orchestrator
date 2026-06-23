@@ -129,9 +129,9 @@ For hard cases, switch one or more agents to OpenAI in `.env`:
 
 ```text
 OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=gpt-4.1-mini
+OPENAI_MODEL=gpt-5.4-mini
 ARCHITECT_AGENT_PROVIDER=openai
-ARCHITECT_AGENT_OPENAI_MODEL=gpt-4.1-mini
+ARCHITECT_AGENT_OPENAI_MODEL=gpt-5.4-mini
 ```
 
 When no configured local or OpenAI provider is available for an agent, the API automatically uses mock persona output so the local workflow remains testable.
@@ -140,7 +140,7 @@ When no configured local or OpenAI provider is available for an agent, the API a
 
 The local backend is conservative by default:
 
-- `OPENAI_MODEL` defaults to `gpt-4.1-mini`.
+- `OPENAI_MODEL` defaults to `gpt-5.4-mini`.
 - `LLM_REQUIRE_APPROVAL` defaults to `true`, so the API pauses before every paid OpenAI call.
 - `LLM_MAX_OUTPUT_TOKENS` defaults to `300`, keeping persona responses short.
 - Every pending LLM call shows estimated input tokens, maximum output tokens, and estimated total cost in the UI.

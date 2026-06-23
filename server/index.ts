@@ -73,7 +73,7 @@ const parsePositiveInteger = (value: string | undefined, fallback: number) => {
 const host = process.env.API_HOST ?? '127.0.0.1'
 const port = parsePositiveInteger(process.env.API_PORT, 3001)
 const stepDurationMs = parsePositiveInteger(process.env.STEP_DURATION_MS, 1300)
-const openaiModel = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini'
+const openaiModel = process.env.OPENAI_MODEL ?? 'gpt-5.4-mini'
 const openaiClient = process.env.OPENAI_API_KEY ? new OpenAI() : null
 const localLlmBaseUrl = process.env.LOCAL_LLM_BASE_URL?.trim()
 const localLlmApiKey = process.env.LOCAL_LLM_API_KEY || 'local-dev'
@@ -179,7 +179,7 @@ const getAgentLlmRoute = (agentName: AgentName): LlmRoute => {
 }
 
 const modelPricingUsdPerMillion: Record<string, { input: number; output: number }> = {
-  'gpt-4.1-mini': { input: 0.4, output: 1.6 },
+  'gpt-5.4-mini': { input: 0.75, output: 4.5 },
 }
 
 const contextUpload = multer({
@@ -529,7 +529,7 @@ const getLlmProvider = (): LlmProviderStatus => {
 const estimateTokens = (value: string) => Math.ceil(value.length / 4)
 
 const estimateCost = (model: string, inputTokens: number, outputTokens: number) => {
-  const pricing = modelPricingUsdPerMillion[model] ?? modelPricingUsdPerMillion['gpt-4.1-mini']
+  const pricing = modelPricingUsdPerMillion[model] ?? modelPricingUsdPerMillion['gpt-5.4-mini']
   const estimatedInputCostUsd = (inputTokens / 1_000_000) * pricing.input
   const estimatedOutputCostUsd = (outputTokens / 1_000_000) * pricing.output
 
