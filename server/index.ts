@@ -54,7 +54,7 @@ let activeRunId: string | null = null
 
 const personaPrompts: Record<AgentName, string> = {
   'Business analyst agent':
-    'You are the Business Analyst agent. You interview the user until requirements are complete, then create a baseline requirements document for developer handoff. Ask one clear question at a time. Be precise and practical.',
+    'You are the Business Analyst agent. You interview the user until requirements are complete, create a baseline requirements document for developer handoff, and revise that baseline when the user later expands scope or asks to add, modify, or delete features. Ask one clear question at a time when a request is ambiguous. Be precise and practical.',
   'Software agent':
     'You are the Software agent. Produce implementation notes, code design, branch-ready tasks, and engineering tradeoffs. Be concrete and avoid vague architecture language.',
   'Tester agent':
@@ -146,9 +146,14 @@ const parseBaDecision = (value: string): BaRequirementDecision => {
 }
 
 const buildMockRequirementsDocument = (run: OrchestratorRun) => {
-  const answers = run.requirements.messages
+  const userMessages = run.requirements.messages
     .filter((message) => message.role === 'user')
+  const answers = userMessages
     .slice(1)
+    .map((message, index) => `${index + 1}. ${message.content}`)
+    .join('\n')
+  const changeRequests = userMessages
+    .slice(4)
     .map((message, index) => `${index + 1}. ${message.content}`)
     .join('\n')
 
@@ -161,6 +166,13 @@ const buildMockRequirementsDocument = (run: OrchestratorRun) => {
     '## User And Business Context',
     answers || 'Captured through the BA clarification chat.',
     '',
+    ...(changeRequests
+      ? [
+          '## Scope Changes And Revisions',
+          changeRequests,
+          '',
+        ]
+      : []),
     '## Functional Scope',
     '- Convert the clarified request into a first usable implementation plan.',
     '- Preserve approval, audit, QA, and deployment expectations as project constraints.',
@@ -176,11 +188,12 @@ const buildMockRequirementsDocument = (run: OrchestratorRun) => {
 }
 
 const createMockBaDecision = (run: OrchestratorRun): BaRequirementDecision => {
+  const hasBaseline = Boolean(run.requirements.baselineArtifactId)
   const userAnswerCount = run.requirements.messages.filter(
     (message) => message.role === 'user',
   ).length - 1
 
-  if (userAnswerCount < mockQuestions.length) {
+  if (!hasBaseline && userAnswerCount < mockQuestions.length) {
     return {
       status: 'clarifying',
       question: mockQuestions[userAnswerCount],
@@ -198,15 +211,22 @@ const buildBaRequirementInput = (run: OrchestratorRun) => {
   const transcript = run.requirements.messages
     .map((message) => `${message.role === 'ba' ? 'BA' : 'User'}: ${message.content}`)
     .join('\n')
+  const currentBaseline = run.requirements.baselineArtifactId
+    ? run.artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
+    : undefined
 
   return [
     `Feature request: ${run.featureRequest}`,
+    currentBaseline
+      ? `Current baseline requirements document:\n${currentBaseline.output}`
+      : 'Current baseline requirements document: none yet.',
     '',
     'Requirement interview transcript:',
     transcript || 'No transcript yet.',
     '',
-    'Decide whether requirements are complete enough to hand off to developer agents.',
-    'If any material requirement is missing, return exactly one clarifying question.',
+    currentBaseline
+      ? 'The user may now be expanding scope or asking to add, modify, or delete features. If the latest request is clear, return a revised complete baseline requirements document that preserves unchanged requirements and explicitly applies the requested changes. If the latest request is ambiguous, return exactly one clarifying question.'
+      : 'Decide whether requirements are complete enough to hand off to developer agents. If any material requirement is missing, return exactly one clarifying question.',
     'Prioritize these gaps: users/personas, business outcome, scope boundaries, workflows, data, rules, integrations, audit/security, acceptance criteria, edge cases, and deployment constraints.',
     '',
     'Return JSON only with one of these shapes:',
@@ -241,6 +261,7 @@ const createOpenAIBaDecision = async (
 }
 
 const createRequirementsArtifact = (
+  run: OrchestratorRun,
   requirementsDocument: string,
   provider: AgentArtifact['provider'],
 ): AgentArtifact => ({
@@ -248,7 +269,9 @@ const createRequirementsArtifact = (
   stepId: 'intake',
   stepLabel: 'Feature intake',
   agentName: 'Business analyst agent',
-  title: 'Baseline requirements document',
+  title: `Baseline requirements document v${
+    run.artifacts.filter((artifact) => artifact.title.startsWith('Baseline requirements document')).length + 1
+  }`,
   summary: firstSentence(requirementsDocument),
   output: requirementsDocument,
   provider,
@@ -258,25 +281,31 @@ const createRequirementsArtifact = (
 
 const continueBaRequirements = async (run: OrchestratorRun) => {
   try {
+    const hadBaseline = Boolean(run.requirements.baselineArtifactId)
     const decision = await createOpenAIBaDecision(run)
 
     if (decision.status === 'complete' && decision.requirementsDocument) {
       const artifact = createRequirementsArtifact(
+        run,
         decision.requirementsDocument,
         openaiClient ? 'openai' : 'mock',
       )
       run.artifacts = [...run.artifacts, artifact]
       run.requirements.status = 'complete'
       run.requirements.baselineArtifactId = artifact.id
-      run.currentStepIndex = 1
-      run.isRunning = true
+      if (!hadBaseline && run.currentStepIndex < 1) {
+        run.currentStepIndex = 1
+        run.isRunning = true
+      }
       appendLog(
         run,
         'Business analyst agent',
-        'Baseline requirements document created and handed off to developer agents.',
+        hadBaseline
+          ? 'Baseline requirements document updated from BA scope chat.'
+          : 'Baseline requirements document created and handed off to developer agents.',
         'success',
       )
-      scheduleRun(run.id)
+      if (run.isRunning) scheduleRun(run.id)
       return
     }
 
@@ -286,9 +315,10 @@ const continueBaRequirements = async (run: OrchestratorRun) => {
     run.requirements.messages.push(makeRequirementMessage('ba', question))
     appendLog(run, 'Business analyst agent', 'Clarifying question sent to the user.')
   } catch (error) {
+    const hadBaseline = Boolean(run.requirements.baselineArtifactId)
     const fallback = createMockBaDecision(run)
     if (fallback.status === 'complete' && fallback.requirementsDocument) {
-      const artifact = createRequirementsArtifact(fallback.requirementsDocument, 'mock')
+      const artifact = createRequirementsArtifact(run, fallback.requirementsDocument, 'mock')
       artifact.summary =
         error instanceof Error
           ? `LLM requirement analysis failed: ${error.message}. Mock baseline generated.`
@@ -296,15 +326,19 @@ const continueBaRequirements = async (run: OrchestratorRun) => {
       run.artifacts = [...run.artifacts, artifact]
       run.requirements.status = 'complete'
       run.requirements.baselineArtifactId = artifact.id
-      run.currentStepIndex = 1
-      run.isRunning = true
+      if (!hadBaseline && run.currentStepIndex < 1) {
+        run.currentStepIndex = 1
+        run.isRunning = true
+      }
       appendLog(
         run,
         'Business analyst agent',
-        'Mock baseline requirements document created after LLM fallback.',
+        hadBaseline
+          ? 'Mock baseline requirements revision created after LLM fallback.'
+          : 'Mock baseline requirements document created after LLM fallback.',
         'warning',
       )
-      scheduleRun(run.id)
+      if (run.isRunning) scheduleRun(run.id)
       return
     }
 
@@ -684,11 +718,6 @@ app.post('/api/runs/:runId/requirements/messages', async (request, response) => 
     return
   }
 
-  if (run.requirements.status === 'complete') {
-    response.status(409).json({ error: 'Requirements are already complete.' })
-    return
-  }
-
   const message =
     typeof request.body?.message === 'string' ? request.body.message.trim() : ''
   if (!message) {
@@ -696,8 +725,19 @@ app.post('/api/runs/:runId/requirements/messages', async (request, response) => 
     return
   }
 
+  if (run.requirements.status === 'complete') {
+    run.requirements.status = 'clarifying'
+    clearRunTimer(run.id)
+  }
+
   run.requirements.messages.push(makeRequirementMessage('user', message))
-  appendLog(run, 'User', 'Requirement clarification answered.')
+  appendLog(
+    run,
+    'User',
+    run.requirements.baselineArtifactId
+      ? 'Requirement scope change submitted.'
+      : 'Requirement clarification answered.',
+  )
   await continueBaRequirements(run)
 
   response.json({ run: serializeRun(run) })

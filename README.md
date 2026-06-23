@@ -37,6 +37,8 @@ New feature work starts with a Business Analyst clarification loop:
 4. The BA creates a baseline requirements document.
 5. The developer pipeline starts from that baseline and hands work to the Software, Tester, and DevOps agents.
 
+After the baseline exists, the BA chat stays open. The user can ask the BA to expand scope, add features, modify requirements, or delete existing features. Each accepted change creates a new baseline requirements document version and makes that version the active baseline for the run.
+
 The requirements chat is persisted in the active in-memory run and is exposed through:
 
 ```text

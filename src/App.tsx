@@ -183,6 +183,8 @@ function App() {
   const baselineRequirement = run?.requirements.baselineArtifactId
     ? artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
     : undefined
+  const canSendRequirementMessage =
+    runStarted && apiStatus === 'online' && !isSubmitting
 
   const branchName = useMemo(() => {
     if (run?.branchName) return run.branchName
@@ -463,13 +465,15 @@ function App() {
         <div className="section-heading compact">
           <div>
             <p className="eyebrow">BA requirements chat</p>
-            <h2>Clarify before developer handoff</h2>
+            <h2>Clarify and revise scope</h2>
           </div>
           <span className={`status-pill ${baselineRequirement ? 'success' : waitingForRequirements ? 'warning' : ''}`}>
-            {baselineRequirement
-              ? 'Baseline ready'
-              : waitingForRequirements
-                ? 'Questions open'
+            {waitingForRequirements
+              ? baselineRequirement
+                ? 'Revision in review'
+                : 'Questions open'
+              : baselineRequirement
+                ? 'Baseline ready'
                 : 'Not started'}
           </span>
         </div>
@@ -499,19 +503,21 @@ function App() {
               placeholder={
                 waitingForRequirements
                   ? 'Answer the BA question...'
-                  : 'Requirement chat is available after starting a run.'
+                  : baselineRequirement
+                    ? 'Ask the BA to add, modify, delete, or expand scope...'
+                    : 'Requirement chat is available after starting a run.'
               }
               rows={4}
-              disabled={!waitingForRequirements || isSubmitting}
+              disabled={!canSendRequirementMessage}
             />
             <button
               type="button"
               className="primary-action"
               onClick={sendRequirementAnswer}
-              disabled={!waitingForRequirements || !requirementAnswer.trim() || isSubmitting}
+              disabled={!canSendRequirementMessage || !requirementAnswer.trim()}
             >
               <SendHorizontal size={17} />
-              Send answer
+              {baselineRequirement ? 'Send to BA' : 'Send answer'}
             </button>
           </div>
 
