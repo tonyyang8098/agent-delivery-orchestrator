@@ -16,9 +16,10 @@ The tool is purpose-bound to software delivery work. It should not behave like a
 - Backend: Node, Express, TypeScript via `tsx`.
 - State: in-memory active run state in the backend.
 - Local runtime memory: `local-state/agent-memory.json`, ignored by Git.
-- LLM provider: OpenAI Responses API when `OPENAI_API_KEY` is present.
-- Default model: `gpt-4.1-mini`.
-- Cost control: every paid LLM call pauses for explicit user approval unless `LLM_REQUIRE_APPROVAL=false`.
+- LLM provider: per-agent routing across local OpenAI-compatible endpoints, OpenAI, or mock output.
+- Local model plan: Software uses `Qwen3-Coder-Next`; Business analyst, Architect, Tester, and DevOps use `Qwen3.6-27B` when local hardware can run it; `Phi-4-mini-instruct` is the cheap/light local fallback.
+- Paid fallback model: `gpt-4.1-mini`, enabled only when an agent is explicitly routed to OpenAI and `OPENAI_API_KEY` is present.
+- Cost control: every paid OpenAI call pauses for explicit user approval unless `LLM_REQUIRE_APPROVAL=false`. Local Ollama/vLLM calls are treated as local `$0` compute.
 
 ## Agent Team
 
@@ -119,12 +120,23 @@ This is not model training or fine-tuning. The model itself does not permanently
 
 User preference for this project:
 
-- Use `gpt-4.1-mini`.
+- Use local open-weight models for cost-efficient daily orchestration.
+- Use `Qwen3-Coder-Next` for the Software agent.
+- Use `Qwen3.6-27B` for BA, Architect, Tester, and DevOps when local hardware can run it.
+- Use `Phi-4-mini-instruct` as the cheap/light local fallback.
+- Keep `gpt-4.1-mini` as the approved paid fallback for hard cases.
 - Be cost efficient.
 - Before any paid LLM call, show the estimated model, input tokens, max output tokens, and estimated cost.
 - Do not approve or run paid LLM calls unless the user explicitly approves.
 
 The browser never receives the OpenAI API key. The key belongs only in local `.env`, which is ignored by Git.
+
+The backend model routing is configured through `.env`:
+
+- `LLM_PROVIDER=mock|local|openai`
+- `LOCAL_LLM_BASE_URL` for Ollama/vLLM OpenAI-compatible `/v1` endpoints
+- `*_AGENT_PROVIDER=local|openai|mock`
+- `*_AGENT_LOCAL_MODEL` and `*_AGENT_OPENAI_MODEL`
 
 ## Cloud Deployment Direction
 

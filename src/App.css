@@ -79,6 +79,18 @@
   color: #1d4ed8;
 }
 
+.api-status.local {
+  background: rgba(13, 148, 136, 0.1);
+  border-color: rgba(13, 148, 136, 0.22);
+  color: #0f766e;
+}
+
+.api-status.mixed {
+  background: rgba(124, 58, 237, 0.1);
+  border-color: rgba(124, 58, 237, 0.2);
+  color: #6d28d9;
+}
+
 .api-status.mock {
   background: rgba(113, 122, 108, 0.12);
   border-color: rgba(113, 122, 108, 0.22);

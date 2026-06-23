@@ -200,6 +200,7 @@ function App() {
     mode: 'mock',
     model: 'mock-local-persona',
     configured: false,
+    routes: [],
   })
   const [agentMemory, setAgentMemory] = useState<AgentMemory[]>([])
 

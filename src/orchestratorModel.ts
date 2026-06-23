@@ -10,6 +10,7 @@ export type StepState = 'pending' | 'active' | 'complete' | 'waiting'
 export type Tone = 'info' | 'success' | 'warning'
 export type EnvironmentName = 'Backlog' | 'Repository' | 'Dev' | 'Stage' | 'Prod'
 export type CloudProvider = 'AWS/Azure'
+export type LlmMode = 'openai' | 'local' | 'mock' | 'mixed'
 
 export type WorkflowStep = {
   id: string
@@ -59,7 +60,7 @@ export type AgentArtifact = {
   title: string
   summary: string
   output: string
-  provider: 'openai' | 'mock'
+  provider: Exclude<LlmMode, 'mixed'>
   model: string
   createdAt: string
 }
@@ -124,9 +125,16 @@ export type AgentMemory = {
 }
 
 export type LlmProviderStatus = {
-  mode: 'openai' | 'mock'
+  mode: LlmMode
   model: string
   configured: boolean
+  routes: {
+    agentName: AgentName
+    provider: Exclude<LlmMode, 'mixed'>
+    model: string
+  }[]
+  paidFallbackModel?: string
+  localBaseUrl?: string
 }
 
 export type PendingLlmCall = {
@@ -134,6 +142,7 @@ export type PendingLlmCall = {
   kind: 'ba-requirements' | 'agent-step'
   title: string
   description: string
+  provider: 'openai'
   model: string
   estimatedInputTokens: number
   maxOutputTokens: number

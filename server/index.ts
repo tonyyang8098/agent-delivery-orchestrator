@@ -19,6 +19,7 @@ import {
   type AgentMemory,
   type AgentName,
   type GateType,
+  type LlmMode,
   type LlmProviderStatus,
   type LogEntry,
   type PendingLlmCall,
@@ -74,10 +75,108 @@ const port = parsePositiveInteger(process.env.API_PORT, 3001)
 const stepDurationMs = parsePositiveInteger(process.env.STEP_DURATION_MS, 1300)
 const openaiModel = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini'
 const openaiClient = process.env.OPENAI_API_KEY ? new OpenAI() : null
+const localLlmBaseUrl = process.env.LOCAL_LLM_BASE_URL?.trim()
+const localLlmApiKey = process.env.LOCAL_LLM_API_KEY || 'local-dev'
+const localLlmClient = localLlmBaseUrl
+  ? new OpenAI({ apiKey: localLlmApiKey, baseURL: localLlmBaseUrl })
+  : null
+const localDefaultModel = process.env.LOCAL_LLM_DEFAULT_MODEL ?? 'Phi-4-mini-instruct'
+const localReasoningModel = process.env.LOCAL_LLM_REASONING_MODEL ?? 'Qwen3.6-27B'
+const localCoderModel = process.env.LOCAL_LLM_CODER_MODEL ?? 'Qwen3-Coder-Next'
 const requireLlmApproval = process.env.LLM_REQUIRE_APPROVAL !== 'false'
 const llmMaxOutputTokens = parsePositiveInteger(process.env.LLM_MAX_OUTPUT_TOKENS, 300)
 const maxContextFiles = parsePositiveInteger(process.env.CONTEXT_FILE_LIMIT, 6)
 const maxContextFileBytes = parsePositiveInteger(process.env.CONTEXT_FILE_MAX_BYTES, 5 * 1024 * 1024)
+
+type RunnableLlmMode = Exclude<LlmMode, 'mixed'>
+
+type LlmRoute = {
+  provider: RunnableLlmMode
+  model: string
+  paid: boolean
+  client: OpenAI | null
+}
+
+const agentEnvPrefix: Record<AgentName, string> = {
+  'Business analyst agent': 'BA_AGENT',
+  'Architect agent': 'ARCHITECT_AGENT',
+  'Software agent': 'SOFTWARE_AGENT',
+  'Tester agent': 'TESTER_AGENT',
+  'DevOps agent': 'DEVOPS_AGENT',
+}
+
+const localDefaultModelForAgent = (agentName: AgentName) =>
+  agentName === 'Software agent' ? localCoderModel : localReasoningModel
+
+const parseLlmProvider = (value: string | undefined): RunnableLlmMode | null => {
+  const normalized = value?.trim().toLowerCase()
+  if (normalized === 'openai' || normalized === 'local' || normalized === 'mock') {
+    return normalized
+  }
+  return null
+}
+
+const defaultLlmProvider = (): RunnableLlmMode => {
+  const configured = parseLlmProvider(process.env.LLM_PROVIDER)
+  if (configured) return configured
+  if (localLlmClient) return 'local'
+  if (openaiClient) return 'openai'
+  return 'mock'
+}
+
+const getAgentConfiguredProvider = (agentName: AgentName): RunnableLlmMode => {
+  const prefix = agentEnvPrefix[agentName]
+  return parseLlmProvider(process.env[`${prefix}_PROVIDER`]) ?? defaultLlmProvider()
+}
+
+const getAgentModelForProvider = (
+  agentName: AgentName,
+  provider: RunnableLlmMode,
+) => {
+  const prefix = agentEnvPrefix[agentName]
+  if (provider === 'openai') {
+    return process.env[`${prefix}_OPENAI_MODEL`] || openaiModel
+  }
+
+  if (provider === 'local') {
+    return (
+      process.env[`${prefix}_LOCAL_MODEL`] ||
+      process.env[`${prefix}_MODEL`] ||
+      localDefaultModelForAgent(agentName) ||
+      localDefaultModel
+    )
+  }
+
+  return 'mock-local-persona'
+}
+
+const getAgentLlmRoute = (agentName: AgentName): LlmRoute => {
+  const configuredProvider = getAgentConfiguredProvider(agentName)
+  if (configuredProvider === 'openai' && openaiClient) {
+    return {
+      provider: 'openai',
+      model: getAgentModelForProvider(agentName, 'openai'),
+      paid: true,
+      client: openaiClient,
+    }
+  }
+
+  if (configuredProvider === 'local' && localLlmClient) {
+    return {
+      provider: 'local',
+      model: getAgentModelForProvider(agentName, 'local'),
+      paid: false,
+      client: localLlmClient,
+    }
+  }
+
+  return {
+    provider: 'mock',
+    model: 'mock-local-persona',
+    paid: false,
+    client: null,
+  }
+}
 
 const modelPricingUsdPerMillion: Record<string, { input: number; output: number }> = {
   'gpt-4.1-mini': { input: 0.4, output: 1.6 },
@@ -394,16 +493,43 @@ const parseUploadedContextFiles = async (
   files: Express.Multer.File[] = [],
 ) => Promise.all(files.map((file) => parseUploadedContextFile(file)))
 
-const getLlmProvider = (): LlmProviderStatus => ({
-  mode: openaiClient ? 'openai' : 'mock',
-  model: openaiClient ? openaiModel : 'mock-local-persona',
-  configured: Boolean(openaiClient),
-})
+const getLlmRoutes = () =>
+  AGENTS.map((agent) => {
+    const route = getAgentLlmRoute(agent.name)
+    return {
+      agentName: agent.name,
+      provider: route.provider,
+      model: route.model,
+    }
+  })
+
+const summarizeModelLabels = (models: string[]) => {
+  const uniqueModels = [...new Set(models)]
+  if (uniqueModels.length === 0) return 'mock-local-persona'
+  if (uniqueModels.length === 1) return uniqueModels[0]
+  return `${uniqueModels.length} routed models`
+}
+
+const getLlmProvider = (): LlmProviderStatus => {
+  const routes = getLlmRoutes()
+  const providers = [...new Set(routes.map((route) => route.provider))]
+  const mode: LlmMode =
+    providers.length === 1 ? providers[0] : 'mixed'
+
+  return {
+    mode,
+    model: summarizeModelLabels(routes.map((route) => route.model)),
+    configured: routes.some((route) => route.provider !== 'mock'),
+    routes,
+    paidFallbackModel: openaiClient ? openaiModel : undefined,
+    localBaseUrl: localLlmBaseUrl,
+  }
+}
 
 const estimateTokens = (value: string) => Math.ceil(value.length / 4)
 
-const estimateCost = (inputTokens: number, outputTokens: number) => {
-  const pricing = modelPricingUsdPerMillion[openaiModel] ?? modelPricingUsdPerMillion['gpt-4.1-mini']
+const estimateCost = (model: string, inputTokens: number, outputTokens: number) => {
+  const pricing = modelPricingUsdPerMillion[model] ?? modelPricingUsdPerMillion['gpt-4.1-mini']
   const estimatedInputCostUsd = (inputTokens / 1_000_000) * pricing.input
   const estimatedOutputCostUsd = (outputTokens / 1_000_000) * pricing.output
 
@@ -414,26 +540,61 @@ const estimateCost = (inputTokens: number, outputTokens: number) => {
   }
 }
 
+type PendingLlmEstimateInput = {
+  model: string
+  inputText: string
+  outputTokenMultiplier?: number
+}
+
 const makePendingLlmCall = (
   kind: PendingLlmCall['kind'],
   title: string,
   description: string,
-  inputText: string,
-  outputTokenMultiplier = 1,
+  estimateInputs: PendingLlmEstimateInput[],
 ): PendingLlmCall => {
-  const estimatedInputTokens = estimateTokens(inputText)
-  const maxOutputTokens = llmMaxOutputTokens * outputTokenMultiplier
-  const costs = estimateCost(estimatedInputTokens, maxOutputTokens)
+  const estimates = estimateInputs.map((estimateInput) => {
+    const estimatedInputTokens = estimateTokens(estimateInput.inputText)
+    const maxOutputTokens =
+      llmMaxOutputTokens * (estimateInput.outputTokenMultiplier ?? 1)
+    const costs = estimateCost(
+      estimateInput.model,
+      estimatedInputTokens,
+      maxOutputTokens,
+    )
+    return {
+      estimatedInputTokens,
+      maxOutputTokens,
+      ...costs,
+    }
+  })
 
   return {
     id: createId(),
     kind,
     title,
     description,
-    model: openaiModel,
-    estimatedInputTokens,
-    maxOutputTokens,
-    ...costs,
+    provider: 'openai',
+    model: summarizeModelLabels(estimateInputs.map((input) => input.model)),
+    estimatedInputTokens: estimates.reduce(
+      (total, estimate) => total + estimate.estimatedInputTokens,
+      0,
+    ),
+    maxOutputTokens: estimates.reduce(
+      (total, estimate) => total + estimate.maxOutputTokens,
+      0,
+    ),
+    estimatedInputCostUsd: estimates.reduce(
+      (total, estimate) => total + estimate.estimatedInputCostUsd,
+      0,
+    ),
+    estimatedOutputCostUsd: estimates.reduce(
+      (total, estimate) => total + estimate.estimatedOutputCostUsd,
+      0,
+    ),
+    estimatedTotalCostUsd: estimates.reduce(
+      (total, estimate) => total + estimate.estimatedTotalCostUsd,
+      0,
+    ),
     createdAt: new Date().toISOString(),
   }
 }
@@ -665,11 +826,58 @@ const buildBaRequirementInput = (run: OrchestratorRun) => {
   ].join('\n')
 }
 
-const createOpenAIBaDecision = async (
+type LlmTextResult = {
+  outputText: string
+  provider: RunnableLlmMode
+  model: string
+}
+
+const createLlmText = async (
+  agentName: AgentName,
+  input: string,
+): Promise<LlmTextResult | null> => {
+  const route = getAgentLlmRoute(agentName)
+  if (route.provider === 'mock' || !route.client) return null
+
+  if (route.provider === 'openai') {
+    const response = await route.client.responses.create({
+      model: route.model,
+      instructions: personaPrompts[agentName],
+      input,
+      max_output_tokens: llmMaxOutputTokens,
+    })
+
+    return {
+      outputText: response.output_text.trim(),
+      provider: route.provider,
+      model: route.model,
+    }
+  }
+
+  const response = await route.client.chat.completions.create({
+    model: route.model,
+    messages: [
+      { role: 'system', content: personaPrompts[agentName] },
+      { role: 'user', content: input },
+    ],
+    max_tokens: llmMaxOutputTokens,
+    temperature: 0.2,
+  })
+  const outputText = response.choices[0]?.message?.content?.trim()
+  if (!outputText) throw new Error('Local LLM returned an empty response.')
+
+  return {
+    outputText,
+    provider: route.provider,
+    model: route.model,
+  }
+}
+
+const createLlmBaDecision = async (
   run: OrchestratorRun,
   forceMock = false,
 ): Promise<BaRequirementDecision> => {
-  if (forceMock || !openaiClient) return createMockBaDecision(run)
+  if (forceMock) return createMockBaDecision(run)
 
   const userAnswerCount = run.requirements.messages.filter(
     (message) => message.role === 'user',
@@ -682,20 +890,19 @@ const createOpenAIBaDecision = async (
     }
   }
 
-  const response = await openaiClient.responses.create({
-    model: openaiModel,
-    instructions: personaPrompts['Business analyst agent'],
-    input: buildBaRequirementInput(run),
-    max_output_tokens: llmMaxOutputTokens,
-  })
+  const result = await createLlmText(
+    'Business analyst agent',
+    buildBaRequirementInput(run),
+  )
+  if (!result) return createMockBaDecision(run)
 
-  return parseBaDecision(response.output_text)
+  return parseBaDecision(result.outputText)
 }
 
 const createRequirementsArtifact = (
   run: OrchestratorRun,
   requirementsDocument: string,
-  provider: AgentArtifact['provider'],
+  route: Pick<AgentArtifact, 'provider' | 'model'>,
 ): AgentArtifact => ({
   id: createId(),
   stepId: 'intake',
@@ -706,8 +913,8 @@ const createRequirementsArtifact = (
   }`,
   summary: firstSentence(requirementsDocument),
   output: requirementsDocument,
-  provider,
-  model: provider === 'openai' ? openaiModel : 'mock-local-persona',
+  provider: route.provider,
+  model: route.model,
   createdAt: new Date().toISOString(),
 })
 
@@ -720,9 +927,10 @@ const continueBaRequirements = async (
     const userAnswerCount = run.requirements.messages.filter(
       (message) => message.role === 'user',
     ).length - 1
+    const baRoute = getAgentLlmRoute('Business analyst agent')
 
     if (
-      openaiClient &&
+      baRoute.paid &&
       requireLlmApproval &&
       !options.approved &&
       !options.forceMock &&
@@ -737,20 +945,22 @@ const continueBaRequirements = async (
           hadBaseline
             ? 'Analyze the requested scope change and update the active baseline document.'
             : 'Analyze the requirements transcript and ask the next question or create the baseline document.',
-          input,
+          [{ model: baRoute.model, inputText: input }],
         ),
       )
       return
     }
 
     run.pendingLlmCall = undefined
-    const decision = await createOpenAIBaDecision(run, options.forceMock)
+    const decision = await createLlmBaDecision(run, options.forceMock)
 
     if (decision.status === 'complete' && decision.requirementsDocument) {
       const artifact = createRequirementsArtifact(
         run,
         decision.requirementsDocument,
-        options.forceMock || !openaiClient ? 'mock' : 'openai',
+        options.forceMock
+          ? { provider: 'mock', model: 'mock-local-persona' }
+          : { provider: baRoute.provider, model: baRoute.model },
       )
       run.artifacts = [...run.artifacts, artifact]
       run.requirements.status = 'complete'
@@ -789,7 +999,10 @@ const continueBaRequirements = async (
     const hadBaseline = Boolean(run.requirements.baselineArtifactId)
     const fallback = createMockBaDecision(run)
     if (fallback.status === 'complete' && fallback.requirementsDocument) {
-      const artifact = createRequirementsArtifact(run, fallback.requirementsDocument, 'mock')
+      const artifact = createRequirementsArtifact(run, fallback.requirementsDocument, {
+        provider: 'mock',
+        model: 'mock-local-persona',
+      })
       artifact.summary =
         error instanceof Error
           ? `LLM requirement analysis failed: ${error.message}. Mock baseline generated.`
@@ -1183,22 +1396,17 @@ const createMockArtifact = (
   }
 }
 
-const createOpenAIArtifact = async (
+const createLlmArtifact = async (
   run: OrchestratorRun,
   step: WorkflowStep,
   agentName: AgentName,
   forceMock = false,
 ): Promise<AgentArtifact> => {
-  if (forceMock || !openaiClient) return createMockArtifact(run, step, agentName)
+  if (forceMock) return createMockArtifact(run, step, agentName)
 
-  const response = await openaiClient.responses.create({
-    model: openaiModel,
-    instructions: personaPrompts[agentName],
-    input: buildAgentInput(run, step, agentName),
-    max_output_tokens: llmMaxOutputTokens,
-  })
+  const result = await createLlmText(agentName, buildAgentInput(run, step, agentName))
+  if (!result) return createMockArtifact(run, step, agentName)
 
-  const output = response.output_text.trim()
   const persona = agentName.replace(' agent', '')
 
   return {
@@ -1207,10 +1415,10 @@ const createOpenAIArtifact = async (
     stepLabel: step.label,
     agentName,
     title: `${persona} handoff`,
-    summary: firstSentence(output),
-    output,
-    provider: 'openai',
-    model: openaiModel,
+    summary: firstSentence(result.outputText),
+    output: result.outputText,
+    provider: result.provider,
+    model: result.model,
     createdAt: new Date().toISOString(),
   }
 }
@@ -1340,7 +1548,7 @@ const createAgentArtifacts = async (
 
   for (const agentName of step.agents) {
     try {
-      artifacts.push(await createOpenAIArtifact(run, step, agentName, forceMock))
+      artifacts.push(await createLlmArtifact(run, step, agentName, forceMock))
     } catch (error) {
       const fallback = createMockArtifact(run, step, agentName)
       fallback.summary =
@@ -1440,13 +1648,21 @@ const clearRunTimer = (runId: string) => {
   }
 }
 
-const buildAgentStepApprovalInput = (run: OrchestratorRun, step: WorkflowStep) =>
+const buildAgentStepApprovalInputs = (run: OrchestratorRun, step: WorkflowStep) =>
   step.agents
+    .map((agentName) => ({
+      agentName,
+      route: getAgentLlmRoute(agentName),
+      inputText: `${personaPrompts[agentName]}\n\n${buildAgentInput(run, step, agentName)}`,
+    }))
+    .filter(({ route }) => route.paid)
     .map(
-      (agentName) =>
-        `${personaPrompts[agentName]}\n\n${buildAgentInput(run, step, agentName)}`,
+      ({ route, inputText }) =>
+        ({
+          model: route.model,
+          inputText,
+        }) satisfies PendingLlmEstimateInput,
     )
-    .join('\n\n---\n\n')
 
 const completeActiveStep = async (
   runId: string,
@@ -1478,8 +1694,9 @@ const completeActiveStep = async (
     const accessBlocker = ensureDeploymentAccess(run, step)
     if (accessBlocker) return
 
+    const paidApprovalInputs = buildAgentStepApprovalInputs(run, step)
     if (
-      openaiClient &&
+      paidApprovalInputs.length > 0 &&
       requireLlmApproval &&
       !options.approved &&
       !options.forceMock
@@ -1490,8 +1707,7 @@ const completeActiveStep = async (
           'agent-step',
           `${step.label} persona handoff`,
           `Run ${step.agents.join(' + ')} for ${step.label}.`,
-          buildAgentStepApprovalInput(run, step),
-          step.agents.length,
+          paidApprovalInputs,
         ),
       )
       return

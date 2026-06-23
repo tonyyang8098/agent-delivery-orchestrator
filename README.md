@@ -96,36 +96,56 @@ Create a local `.env` file from the example:
 cp .env.example .env
 ```
 
-Set:
+Set the local model routing first:
 
 ```text
-OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=gpt-4.1-mini
+LLM_PROVIDER=local
+LOCAL_LLM_BASE_URL=http://127.0.0.1:11434/v1
+LOCAL_LLM_API_KEY=local-dev
+LOCAL_LLM_REASONING_MODEL=Qwen3.6-27B
+LOCAL_LLM_CODER_MODEL=Qwen3-Coder-Next
+LOCAL_LLM_DEFAULT_MODEL=Phi-4-mini-instruct
+BA_AGENT_PROVIDER=local
+ARCHITECT_AGENT_PROVIDER=local
+SOFTWARE_AGENT_PROVIDER=local
+TESTER_AGENT_PROVIDER=local
+DEVOPS_AGENT_PROVIDER=local
 LLM_REQUIRE_APPROVAL=true
 LLM_MAX_OUTPUT_TOKENS=300
 CONTEXT_FILE_LIMIT=6
 CONTEXT_FILE_MAX_BYTES=5242880
 ```
 
-When `OPENAI_API_KEY` is present, each workflow step calls the OpenAI Responses API with the persona assigned to that step:
+The backend can route each persona to a local OpenAI-compatible endpoint, such as Ollama or vLLM:
 
-- Business Analyst agent
-- Architect agent
-- Software agent
-- Tester agent
-- DevOps agent
+- Business Analyst agent: `Qwen3.6-27B`
+- Architect agent: `Qwen3.6-27B`
+- Software agent: `Qwen3-Coder-Next`
+- Tester agent: `Qwen3.6-27B`
+- DevOps agent: `Qwen3.6-27B`
+- Cheap/light fallback model: `Phi-4-mini-instruct`
 
-When `OPENAI_API_KEY` is missing, the API automatically uses mock persona output so the local workflow remains testable.
+For hard cases, switch one or more agents to OpenAI in `.env`:
+
+```text
+OPENAI_API_KEY=your_api_key_here
+OPENAI_MODEL=gpt-4.1-mini
+ARCHITECT_AGENT_PROVIDER=openai
+ARCHITECT_AGENT_OPENAI_MODEL=gpt-4.1-mini
+```
+
+When no configured local or OpenAI provider is available for an agent, the API automatically uses mock persona output so the local workflow remains testable.
 
 ## LLM Cost Controls
 
 The local backend is conservative by default:
 
 - `OPENAI_MODEL` defaults to `gpt-4.1-mini`.
-- `LLM_REQUIRE_APPROVAL` defaults to `true`, so the API pauses before every paid LLM call.
+- `LLM_REQUIRE_APPROVAL` defaults to `true`, so the API pauses before every paid OpenAI call.
 - `LLM_MAX_OUTPUT_TOKENS` defaults to `300`, keeping persona responses short.
 - Every pending LLM call shows estimated input tokens, maximum output tokens, and estimated total cost in the UI.
 - The operator can approve the paid call or choose mock output for `$0`.
+- Local Ollama/vLLM calls are treated as `$0` local compute and do not trigger the paid approval gate.
 
 The approval endpoints are:
 
