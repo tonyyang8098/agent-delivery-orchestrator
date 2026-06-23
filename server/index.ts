@@ -74,7 +74,9 @@ let activeRunId: string | null = null
 
 const personaPrompts: Record<AgentName, string> = {
   'Business analyst agent':
-    'You are the Business Analyst agent. You interview the user until requirements are complete, create a baseline requirements document for developer handoff, and revise that baseline when the user later expands scope or asks to add, modify, or delete features. Ask one clear question at a time when a request is ambiguous. Be precise and practical.',
+    'You are the Business Analyst agent. You interview the user until requirements are complete, create a baseline requirements document, convert approved scope and architecture into user stories, and revise that baseline when the user later expands scope or asks to add, modify, or delete features. Ask one clear question at a time when a request is ambiguous. Be precise and practical.',
+  'Architect agent':
+    'You are the Architect agent. Design the solution from the baseline requirements document. Define system boundaries, core components, data flow, integrations, non-functional constraints, architecture risks, and tradeoffs. Keep designs implementable for local developer handoff.',
   'Software agent':
     'You are the Software agent. Produce implementation notes, code design, branch-ready tasks, and engineering tradeoffs. Be concrete and avoid vague architecture language.',
   'Tester agent':
@@ -737,9 +739,10 @@ const getPeerReviewStatus = (
   }
 
   if (
-    (reviewerAgent === 'Tester agent' && ['solution-plan', 'build-code', 'pull-request'].includes(step.id)) ||
-    (reviewerAgent === 'DevOps agent' && ['check-in', 'pull-request', 'deploy-stage'].includes(step.id)) ||
-    (reviewerAgent === 'Software agent' && ['qa-code', 'deploy-stage', 'deploy-prod'].includes(step.id))
+    (reviewerAgent === 'Architect agent' && ['user-stories', 'developer-handoff', 'build-code'].includes(step.id)) ||
+    (reviewerAgent === 'Tester agent' && ['architecture-design', 'user-stories', 'developer-handoff', 'build-code', 'pull-request'].includes(step.id)) ||
+    (reviewerAgent === 'DevOps agent' && ['architecture-design', 'developer-handoff', 'check-in', 'pull-request', 'deploy-stage'].includes(step.id)) ||
+    (reviewerAgent === 'Software agent' && ['architecture-design', 'user-stories', 'qa-code', 'deploy-stage', 'deploy-prod'].includes(step.id))
   ) {
     return 'watch'
   }
@@ -765,6 +768,10 @@ const getReviewRecommendation = (
 
   if (reviewerAgent === 'Software agent') {
     return `${prefix} Keep implementation tasks small, dependency impact explicit, and branch work traceable.`
+  }
+
+  if (reviewerAgent === 'Architect agent') {
+    return `${prefix} Keep system boundaries, data flow, integration assumptions, and technical tradeoffs explicit.`
   }
 
   if (reviewerAgent === 'Tester agent') {

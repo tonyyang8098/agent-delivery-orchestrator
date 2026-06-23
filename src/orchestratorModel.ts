@@ -1,5 +1,6 @@
 export type AgentName =
   | 'Business analyst agent'
+  | 'Architect agent'
   | 'Software agent'
   | 'Tester agent'
   | 'DevOps agent'
@@ -125,12 +126,28 @@ export const WORKFLOW: WorkflowStep[] = [
     agents: ['Business analyst agent'],
   },
   {
-    id: 'solution-plan',
-    label: 'Solution plan',
+    id: 'architecture-design',
+    label: 'Architecture design',
     lane: 'Plan',
-    detail: 'Split the work into branch tasks, test notes, and deployment needs.',
+    detail: 'Design the solution architecture from the baseline requirements.',
     environment: 'Repository',
-    agents: ['Business analyst agent', 'Software agent'],
+    agents: ['Architect agent'],
+  },
+  {
+    id: 'user-stories',
+    label: 'User stories',
+    lane: 'Plan',
+    detail: 'Convert the baseline and architecture into developer-ready user stories.',
+    environment: 'Backlog',
+    agents: ['Business analyst agent'],
+  },
+  {
+    id: 'developer-handoff',
+    label: 'Developer handoff',
+    lane: 'Plan',
+    detail: 'Split stories into branch tasks, technical notes, test notes, and deployment needs.',
+    environment: 'Repository',
+    agents: ['Architect agent', 'Business analyst agent', 'Software agent'],
   },
   {
     id: 'build-code',
@@ -212,9 +229,16 @@ export const AGENTS: Agent[] = [
   {
     name: 'Business analyst agent',
     shortName: 'Business analyst',
-    mission: 'Requirements, acceptance criteria, and release notes.',
-    specialization: 'Requirement discovery, scope control, acceptance criteria, and stakeholder language.',
-    reviewLens: 'Checks whether work stays aligned to the baseline requirements document.',
+    mission: 'Requirements, user stories, acceptance criteria, and release notes.',
+    specialization: 'Requirement discovery, scope control, user stories, acceptance criteria, and stakeholder language.',
+    reviewLens: 'Checks whether work stays aligned to the baseline requirements document and user-story intent.',
+  },
+  {
+    name: 'Architect agent',
+    shortName: 'Architect',
+    mission: 'Solution architecture, system boundaries, integration design, and technical constraints.',
+    specialization: 'Architecture design, system decomposition, data flow, integration boundaries, and non-functional constraints.',
+    reviewLens: 'Checks architectural coherence, requirement coverage, technical dependencies, scalability, and design tradeoffs.',
   },
   {
     name: 'Software agent',

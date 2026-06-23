@@ -2,14 +2,15 @@
 
 A local React and Node prototype for coordinating AI-assisted feature delivery across dev, stage, and prod.
 
-The UI models four agents:
+The UI models five agents:
 
 - Business analyst agent
+- Architect agent
 - Software agent
 - Tester agent
 - DevOps agent
 
-The workflow covers feature intake, planning, code build, QA, code check-in, pull request creation, human PR merge, dev deployment, stage deployment, human production approval, and production deployment.
+The workflow covers feature intake, architecture design, user story creation, developer handoff, code build, QA, code check-in, pull request creation, human PR merge, dev deployment, stage deployment, human production approval, and production deployment.
 
 ## Local Development
 
@@ -35,11 +36,13 @@ New feature work starts with a Business Analyst clarification loop:
 2. The Business Analyst agent asks one clarifying question at a time.
 3. The user answers until the BA determines the baseline requirements are complete.
 4. The BA creates a baseline requirements document.
-5. The developer pipeline starts from that baseline and hands work to the Software, Tester, and DevOps agents.
+5. The Architect agent designs the solution from that baseline.
+6. The BA converts the baseline and architecture into user stories.
+7. The orchestrator hands developer-ready stories and technical notes to the Software, Tester, and DevOps agents.
 
 After the baseline exists, the BA chat stays open. The user can ask the BA to expand scope, add features, modify requirements, or delete existing features. Each accepted change creates a new baseline requirements document version and makes that version the active baseline for the run.
 
-The active baseline is treated as the shared context file for the team. Each downstream agent receives it as `baseline-requirements.md` when producing implementation, QA, repository, or deployment handoffs.
+The active baseline is treated as the shared context file for the team. Each downstream agent receives it as `baseline-requirements.md` when producing architecture, user stories, implementation, QA, repository, or deployment handoffs.
 
 The requirements chat is persisted in the active in-memory run and is exposed through:
 
@@ -52,6 +55,7 @@ POST /api/runs/:runId/requirements/messages
 Agents now specialize and review each other through their own lens:
 
 - Business Analyst checks scope and acceptance alignment.
+- Architect checks system boundaries, data flow, dependencies, and technical tradeoffs.
 - Software checks implementation feasibility and maintainability.
 - Tester checks acceptance coverage, regressions, and edge cases.
 - DevOps checks PR, environment, deployment, rollback, and release evidence.
@@ -82,6 +86,7 @@ LLM_MAX_OUTPUT_TOKENS=300
 When `OPENAI_API_KEY` is present, each workflow step calls the OpenAI Responses API with the persona assigned to that step:
 
 - Business Analyst agent
+- Architect agent
 - Software agent
 - Tester agent
 - DevOps agent
