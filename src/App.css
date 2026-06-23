@@ -887,6 +887,50 @@ textarea:disabled {
   color: #166534;
 }
 
+.access-blocker-row {
+  background: rgba(180, 83, 9, 0.06);
+  border-color: rgba(180, 83, 9, 0.24);
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+}
+
+.access-blocker-row h3 {
+  color: #92400e;
+}
+
+.access-blocker-details {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.access-blocker-details span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.access-blocker-row ul {
+  color: var(--text);
+  display: grid;
+  font-size: 13px;
+  gap: 6px;
+  line-height: 1.4;
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+.access-blocker-actions {
+  align-self: center;
+  display: grid;
+  gap: 8px;
+}
+
+.access-blocker-actions button {
+  width: 100%;
+}
+
 .repo-details,
 .repo-name-line,
 .branch-line,
@@ -1026,6 +1070,11 @@ textarea:disabled {
 .environment-row.approval-required .env-head strong {
   background: rgba(180, 83, 9, 0.12);
   color: #b45309;
+}
+
+.environment-row.access-blocked .env-head strong {
+  background: rgba(190, 18, 60, 0.1);
+  color: #be123c;
 }
 
 .activity-list {

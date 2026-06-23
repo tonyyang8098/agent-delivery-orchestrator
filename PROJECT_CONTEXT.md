@@ -128,14 +128,17 @@ The browser never receives the OpenAI API key. The key belongs only in local `.e
 
 ## Cloud Deployment Direction
 
-Azure and AWS deployment are not implemented yet. The current DevOps behavior is simulated local orchestration and handoff generation.
+Azure and AWS deployment adapters are not implemented yet. The current DevOps behavior is simulated local orchestration and handoff generation, but the workflow now has a first-class deployment access blocker.
 
 The desired future model is:
 
 - Dev/stage deployment through scoped automation roles or service principals.
 - Prod deployment behind a human approval gate.
 - Agent triggers only approved scripts, IaC, or CI/CD workflows.
-- If blocked on permissions, the agent stops and creates an access blocker with environment, cloud, attempted action, resource, missing permission, evidence, and requested human resolution.
+- Before each deployment environment, DevOps instructs the human to provide scoped AWS/Azure access requirements.
+- If access is missing, DevOps creates an access blocker with environment, cloud, attempted action, resource, missing permissions, evidence, and requested human resolution.
+- The run stays parked while the blocker is open.
+- Once the human completes setup, DevOps verifies the setup and resumes. In the current local prototype, verification records human confirmation; future AWS/Azure adapters should perform real IAM/RBAC checks.
 
 Secrets and cloud credentials must not be committed. Future integrations should use local environment variables for development and secure secret stores or OIDC federation for CI/CD.
 
@@ -144,6 +147,7 @@ Secrets and cloud credentials must not be committed. Future integrations should 
 - Backend run state is in memory and resets when the API restarts.
 - Real GitHub repo/branch/PR creation is not connected yet.
 - Real AWS/Azure deployment is not connected yet.
+- Deployment access verification is local/manual until cloud adapters are added.
 - Agent learning is local prompt memory, not fine-tuning.
 - Uploaded file binaries are not retained after parsing.
 - The purpose guardrail is deterministic and keyword based, so it may need refinement as use cases expand.
@@ -156,4 +160,3 @@ npm run dev:all
 npm run lint
 npm run build
 ```
-

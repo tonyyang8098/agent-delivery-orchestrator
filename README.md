@@ -51,6 +51,8 @@ The DevOps agent prepares the repository path for three long-lived environment b
 
 The pull request target is `dev`; promotion then flows `dev -> stage -> prod`.
 
+For deployment access, DevOps creates an access blocker when scoped AWS/Azure access has not been verified for the target environment. The blocker tells the human what identity, permissions, secret handling, and environment scope are required. The run remains paused until the human marks setup complete; in local mode DevOps records that verification and resumes. Future cloud adapters should replace that local verification with real IAM/RBAC checks.
+
 After the baseline exists, the BA chat stays open. The user can ask the BA to expand scope, add features, modify requirements, or delete existing features. Each accepted change creates a new baseline requirements document version and makes that version the active baseline for the run.
 
 The active baseline is treated as the shared context file for the team. Each downstream agent receives it as `baseline-requirements.md` when producing architecture, user stories, implementation, QA, repository, or deployment handoffs. Developer handoff and build work stay blocked until the parallel design/story gate completes.

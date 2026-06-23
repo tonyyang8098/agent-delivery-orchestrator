@@ -14,6 +14,7 @@ import {
   WORKFLOW,
   slugify,
   type AgentArtifact,
+  type DeploymentAccessBlocker,
   type EnvironmentBranch,
   type AgentMemory,
   type AgentName,
@@ -34,6 +35,7 @@ import {
 type RunStatus =
   | 'requirements'
   | 'llm-approval'
+  | 'blocked-on-access'
   | 'running'
   | 'paused'
   | 'waiting-for-human'
@@ -57,6 +59,7 @@ type OrchestratorRun = {
   artifacts: AgentArtifact[]
   peerReviews: PeerReview[]
   contextFiles: UploadedContextFile[]
+  accessBlockers: DeploymentAccessBlocker[]
   pendingLlmCall?: PendingLlmCall
 }
 
@@ -103,7 +106,7 @@ const personaPrompts: Record<AgentName, string> = {
   'Tester agent':
     'You are the Tester agent. Produce QA strategy, acceptance coverage, regression risks, and test evidence. Think about failure modes and environment-specific checks.',
   'DevOps agent':
-    'You are the DevOps agent. Produce repository, pull request, deployment, environment, rollback, and release-control handoffs. Respect human approval gates.',
+    'You are the DevOps agent. Produce repository, pull request, deployment, environment, rollback, and release-control handoffs. Respect human approval gates. For AWS or Azure access setup, instruct the human with exact scoped requirements, verify setup before continuing, and create an access blocker when permissions or credentials are missing.',
 }
 
 const localStateDir = path.resolve(process.cwd(), 'local-state')
@@ -863,6 +866,89 @@ const formatEnvironmentBranchPlan = (branches: EnvironmentBranch[]) =>
     )
     .join('\n')
 
+const deploymentStepEnvironments: Record<string, DeploymentAccessBlocker['environment']> = {
+  'deploy-dev': 'Dev',
+  'deploy-stage': 'Stage',
+  'deploy-prod': 'Prod',
+}
+
+const getDeploymentEnvironment = (step: WorkflowStep) =>
+  deploymentStepEnvironments[step.id]
+
+const getActiveAccessBlocker = (run: OrchestratorRun) =>
+  run.accessBlockers.find((blocker) => blocker.status === 'open')
+
+const hasResolvedAccessForEnvironment = (
+  run: OrchestratorRun,
+  environment: DeploymentAccessBlocker['environment'],
+) =>
+  run.accessBlockers.some(
+    (blocker) =>
+      blocker.environment === environment && blocker.status === 'resolved',
+  )
+
+const buildDeploymentAccessBlocker = (
+  run: OrchestratorRun,
+  step: WorkflowStep,
+  environment: DeploymentAccessBlocker['environment'],
+): DeploymentAccessBlocker => ({
+  id: createId(),
+  status: 'open',
+  environment,
+  cloudProvider: 'AWS/Azure',
+  action: `${step.label} for ${run.repositoryName}`,
+  resource:
+    environment === 'Prod'
+      ? `${run.repositoryName} production subscription/account and prod branch`
+      : `${run.repositoryName} ${environment.toLowerCase()} resource group/account and ${environment.toLowerCase()} branch`,
+  missingAccess: [
+    'Scoped AWS IAM role or Azure service principal/managed identity for this environment.',
+    'Permission to read deployment artifacts and environment configuration.',
+    'Permission to deploy only approved infrastructure/application changes for this environment.',
+    'Secret access through a secret store or CI/CD secret, not committed files.',
+  ],
+  instructions: [
+    `Create or confirm a scoped ${environment} deployment identity for AWS or Azure.`,
+    `Grant the identity access only to ${environment} resources needed by ${run.repositoryName}.`,
+    'Store credentials in local .env for local testing or in GitHub Actions secrets, Azure Key Vault, AWS Secrets Manager, or OIDC federation for CI/CD.',
+    environment === 'Prod'
+      ? 'Keep production access separate from dev/stage and require human production approval before use.'
+      : 'Keep non-prod access separate from production access.',
+    'Return here and choose Verify setup once the access requirement is complete.',
+  ],
+  evidence:
+    'No cloud deployment adapter or scoped credential verification has been recorded for this environment yet.',
+  requestedResolution:
+    'Human must provide/confirm scoped cloud access. DevOps will verify the setup and resume only after this blocker is resolved.',
+  createdAt: new Date().toISOString(),
+})
+
+const ensureDeploymentAccess = (
+  run: OrchestratorRun,
+  step: WorkflowStep,
+) => {
+  const environment = getDeploymentEnvironment(step)
+  if (!environment) return null
+  if (hasResolvedAccessForEnvironment(run, environment)) return null
+
+  const existingBlocker = run.accessBlockers.find(
+    (blocker) =>
+      blocker.environment === environment && blocker.status === 'open',
+  )
+  if (existingBlocker) return existingBlocker
+
+  const blocker = buildDeploymentAccessBlocker(run, step, environment)
+  run.accessBlockers = [...run.accessBlockers, blocker]
+  run.isRunning = false
+  appendLog(
+    run,
+    'DevOps agent',
+    `${environment} deployment is blocked until scoped AWS/Azure access is verified.`,
+    'warning',
+  )
+  return blocker
+}
+
 type PurposeGuardrailResult =
   | { allowed: true }
   | { allowed: false; error: string }
@@ -996,6 +1082,7 @@ const buildAgentInput = (
         `${artifact.agentName} during ${artifact.stepLabel}: ${artifact.summary}`,
     )
     .join('\n')
+  const activeAccessBlocker = getActiveAccessBlocker(run)
 
   return [
     `Project: ${run.projectName}`,
@@ -1015,6 +1102,14 @@ const buildAgentInput = (
       : '',
     step.id === 'developer-handoff'
       ? 'Developer gate: use the finalized design and user stories from the prior step before assigning any software implementation work.'
+      : '',
+    step.agents.includes('DevOps agent')
+      ? [
+          'Cloud access rule: for AWS/Azure deployment, instruct the human with scoped access requirements, verify access before continuing, and create or honor an access blocker if permissions are missing.',
+          activeAccessBlocker
+            ? `Active access blocker: ${activeAccessBlocker.environment} ${activeAccessBlocker.action}. Missing access: ${activeAccessBlocker.missingAccess.join('; ')}`
+            : 'Active access blocker: none.',
+        ].join('\n')
       : '',
     '',
     getBaselineContextFile(run),
@@ -1050,6 +1145,7 @@ const createMockArtifact = (
     run.contextFiles.length > 0
       ? `Attached context: ${run.contextFiles.map((file) => file.name).join(', ')}.`
       : 'No attached context files were supplied.'
+  const activeAccessBlocker = getActiveAccessBlocker(run)
   const output = [
     `### Deliverable`,
     `${persona} prepared the local handoff for ${step.label.toLowerCase()} against "${run.featureRequest}".`,
@@ -1061,6 +1157,9 @@ const createMockArtifact = (
     `Repository: ${run.repositoryName}.`,
     `Feature branch: ${run.branchName}, based from dev.`,
     `Environment branches: ${run.environmentBranches.map((branch) => branch.branchName).join(' -> ')}.`,
+    activeAccessBlocker
+      ? `Access blocker: ${activeAccessBlocker.environment} deployment needs ${activeAccessBlocker.missingAccess.join('; ')}.`
+      : `Access blocker: none currently open.`,
     uploadedContext,
     `Specialist lens: ${agent.specialization}`,
     `The workflow advanced through ${step.environment} with simulated evidence for ${step.agents.join(', ')}.`,
@@ -1272,13 +1371,18 @@ const getRunFlags = (run: OrchestratorRun) => {
   const isComplete = run.currentStepIndex >= WORKFLOW.length
   const waitingForLlmApproval = Boolean(run.pendingLlmCall)
   const waitingForRequirements = run.requirements.status === 'clarifying'
+  const waitingForAccess = Boolean(getActiveAccessBlocker(run))
   const waitingForMerge =
     Boolean(currentStep?.gate === 'merge') && !run.mergeApproved
   const waitingForProd =
     Boolean(currentStep?.gate === 'prod') && !run.prodApproved
   const isWaiting =
     !isComplete &&
-    (waitingForLlmApproval || waitingForRequirements || waitingForMerge || waitingForProd)
+    (waitingForLlmApproval ||
+      waitingForRequirements ||
+      waitingForAccess ||
+      waitingForMerge ||
+      waitingForProd)
   const progress = Math.round(
     (Math.min(run.currentStepIndex, WORKFLOW.length) / WORKFLOW.length) * 100,
   )
@@ -1288,7 +1392,9 @@ const getRunFlags = (run: OrchestratorRun) => {
       ? 'llm-approval'
     : waitingForRequirements
       ? 'requirements'
-      : waitingForMerge || waitingForProd
+    : waitingForAccess
+      ? 'blocked-on-access'
+    : waitingForMerge || waitingForProd
       ? 'waiting-for-human'
       : run.isRunning
         ? 'running'
@@ -1299,8 +1405,10 @@ const getRunFlags = (run: OrchestratorRun) => {
     isComplete,
     waitingForLlmApproval,
     waitingForRequirements,
+    waitingForAccess,
     waitingForMerge,
     waitingForProd,
+    activeAccessBlocker: getActiveAccessBlocker(run),
     isWaiting,
     progress,
     status,
@@ -1366,6 +1474,9 @@ const completeActiveStep = async (
 
     const step = getCurrentStep(run)
     if (!step) return
+
+    const accessBlocker = ensureDeploymentAccess(run, step)
+    if (accessBlocker) return
 
     if (
       openaiClient &&
@@ -1567,6 +1678,7 @@ app.post('/api/runs', contextUpload.array('contextFiles', maxContextFiles), asyn
     artifacts: [],
     peerReviews: [],
     contextFiles,
+    accessBlockers: [],
     logEntries: [
       makeLogEntry('User request', derivedFeatureRequest),
       makeLogEntry(
@@ -1727,6 +1839,72 @@ app.post('/api/runs/:runId/resume', (request, response) => {
   response.json({ run: serializeRun(run) })
 })
 
+app.post('/api/runs/:runId/access/verify', (request, response) => {
+  const run = runs.get(request.params.runId)
+  if (!run) {
+    response.status(404).json(notFound)
+    return
+  }
+
+  const blocker = getActiveAccessBlocker(run)
+  if (!blocker) {
+    response.status(409).json({ error: 'No deployment access blocker is waiting for verification.' })
+    return
+  }
+
+  const evidence =
+    typeof request.body?.evidence === 'string' && request.body.evidence.trim()
+      ? request.body.evidence.trim()
+      : 'Human confirmed scoped cloud access is configured. Local prototype recorded verification; real AWS/Azure adapter checks will run when integrated.'
+
+  blocker.status = 'resolved'
+  blocker.evidence = evidence
+  blocker.resolutionNote =
+    'DevOps verified the human-provided access setup in local mode and resumed the deployment workflow.'
+  blocker.lastCheckedAt = new Date().toISOString()
+  blocker.resolvedAt = blocker.lastCheckedAt
+  run.isRunning = true
+  appendLog(
+    run,
+    'DevOps agent',
+    `${blocker.environment} access blocker resolved. Deployment workflow resumed.`,
+    'success',
+  )
+  scheduleRun(run.id)
+
+  response.json({ run: serializeRun(run) })
+})
+
+app.post('/api/runs/:runId/access/still-blocked', (request, response) => {
+  const run = runs.get(request.params.runId)
+  if (!run) {
+    response.status(404).json(notFound)
+    return
+  }
+
+  const blocker = getActiveAccessBlocker(run)
+  if (!blocker) {
+    response.status(409).json({ error: 'No deployment access blocker is open.' })
+    return
+  }
+
+  blocker.lastCheckedAt = new Date().toISOString()
+  blocker.evidence =
+    typeof request.body?.evidence === 'string' && request.body.evidence.trim()
+      ? request.body.evidence.trim()
+      : 'Human indicated access is still blocked. DevOps remains parked until permissions are resolved.'
+  run.isRunning = false
+  clearRunTimer(run.id)
+  appendLog(
+    run,
+    'DevOps agent',
+    `${blocker.environment} deployment remains blocked on AWS/Azure access.`,
+    'warning',
+  )
+
+  response.json({ run: serializeRun(run) })
+})
+
 app.post('/api/runs/:runId/reset', (request, response) => {
   const run = runs.get(request.params.runId)
   if (!run) {
@@ -1759,7 +1937,7 @@ app.post('/api/runs/:runId/approvals/:gate', (request, response) => {
     run.mergeApproved = true
     run.currentStepIndex += 1
     run.isRunning = true
-    appendLog(run, 'Human reviewer', 'Pull request manually merged into main.', 'success')
+    appendLog(run, 'Human reviewer', 'Pull request manually merged into dev.', 'success')
     scheduleRun(run.id)
     response.json({ run: serializeRun(run) })
     return

@@ -9,6 +9,7 @@ export type GateType = 'merge' | 'prod'
 export type StepState = 'pending' | 'active' | 'complete' | 'waiting'
 export type Tone = 'info' | 'success' | 'warning'
 export type EnvironmentName = 'Backlog' | 'Repository' | 'Dev' | 'Stage' | 'Prod'
+export type CloudProvider = 'AWS/Azure'
 
 export type WorkflowStep = {
   id: string
@@ -76,6 +77,25 @@ export type UploadedContextFile = {
   rowCount?: number
   columns?: string[]
   createdAt: string
+}
+
+export type DeploymentAccessBlockerStatus = 'open' | 'resolved'
+
+export type DeploymentAccessBlocker = {
+  id: string
+  status: DeploymentAccessBlockerStatus
+  environment: 'Dev' | 'Stage' | 'Prod'
+  cloudProvider: CloudProvider
+  action: string
+  resource: string
+  missingAccess: string[]
+  instructions: string[]
+  evidence: string
+  requestedResolution: string
+  createdAt: string
+  lastCheckedAt?: string
+  resolvedAt?: string
+  resolutionNote?: string
 }
 
 export type PeerReviewStatus = 'approved' | 'watch' | 'changes-requested'

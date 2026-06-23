@@ -38,6 +38,7 @@ import {
   slugify,
   type AgentArtifact,
   type AgentMemory,
+  type DeploymentAccessBlocker,
   type EnvironmentBranch,
   type AgentName,
   type GateType,
@@ -56,6 +57,7 @@ type ApiStatus = 'checking' | 'online' | 'offline'
 type RunStatus =
   | 'requirements'
   | 'llm-approval'
+  | 'blocked-on-access'
   | 'running'
   | 'paused'
   | 'waiting-for-human'
@@ -80,6 +82,7 @@ type OrchestratorRun = {
   isComplete: boolean
   waitingForLlmApproval: boolean
   waitingForRequirements: boolean
+  waitingForAccess: boolean
   waitingForMerge: boolean
   waitingForProd: boolean
   isWaiting: boolean
@@ -87,6 +90,8 @@ type OrchestratorRun = {
   status: RunStatus
   artifacts: AgentArtifact[]
   peerReviews: PeerReview[]
+  accessBlockers: DeploymentAccessBlocker[]
+  activeAccessBlocker?: DeploymentAccessBlocker
   agentMemory: AgentMemory[]
   contextFiles: UploadedContextFile[]
   llmProvider: LlmProviderStatus
@@ -204,6 +209,7 @@ function App() {
   const isComplete = Boolean(run?.isComplete)
   const waitingForLlmApproval = Boolean(run?.waitingForLlmApproval)
   const waitingForRequirements = Boolean(run?.waitingForRequirements)
+  const waitingForAccess = Boolean(run?.waitingForAccess)
   const waitingForMerge = Boolean(run?.waitingForMerge)
   const waitingForProd = Boolean(run?.waitingForProd)
   const isWaiting = Boolean(run?.isWaiting)
@@ -217,6 +223,7 @@ function App() {
   const contextFiles = run?.contextFiles ?? []
   const environmentBranches = run?.environmentBranches ?? ENVIRONMENT_BRANCHES
   const pendingLlmCall = run?.pendingLlmCall
+  const activeAccessBlocker = run?.activeAccessBlocker
   const requirementMessages = run?.requirements.messages ?? []
   const baselineRequirement = run?.requirements.baselineArtifactId
     ? artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
@@ -303,6 +310,7 @@ function App() {
     if (index > currentStepIndex || isComplete) return 'pending'
     if (waitingForLlmApproval) return 'waiting'
     if (index === 0 && waitingForRequirements) return 'waiting'
+    if (waitingForAccess && index === currentStepIndex) return 'waiting'
     if (WORKFLOW[index].gate && isWaiting) return 'waiting'
     return 'active'
   }
@@ -387,6 +395,32 @@ function App() {
     )
   }
 
+  const verifyAccessBlocker = () => {
+    if (!run || !activeAccessBlocker) return
+
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/access/verify`, {
+        method: 'POST',
+        body: JSON.stringify({
+          evidence: `${activeAccessBlocker.environment} access setup confirmed by human operator.`,
+        }),
+      }),
+    )
+  }
+
+  const keepAccessBlockerOpen = () => {
+    if (!run || !activeAccessBlocker) return
+
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/access/still-blocked`, {
+        method: 'POST',
+        body: JSON.stringify({
+          evidence: `${activeAccessBlocker.environment} access remains unresolved.`,
+        }),
+      }),
+    )
+  }
+
   const toggleRunning = () => {
     if (!runStarted) {
       startRun()
@@ -423,6 +457,7 @@ function App() {
   const getAgentFocus = (agent: (typeof AGENTS)[number]) => {
     if (currentStep?.agents.includes(agent.name)) {
       if (waitingForRequirements) return 'Interviewing the user for complete requirements.'
+      if (waitingForAccess) return 'Waiting for scoped AWS/Azure access verification.'
       return isWaiting ? 'Blocked on a human gate.' : currentStep.detail
     }
     return getAgentState(agent.name) === 'Complete'
@@ -439,6 +474,7 @@ function App() {
     const deployIndex = WORKFLOW.findIndex((step) => step.id === stepId)
 
     if (!runStarted) return 'Ready'
+    if (currentStep?.id === stepId && waitingForAccess) return 'Access blocked'
     if (currentStep?.id === stepId) return 'Deploying'
     if (currentStepIndex > deployIndex) return 'Live'
     if (envName === 'Prod' && waitingForProd) return 'Approval required'
@@ -587,6 +623,8 @@ function App() {
                   ? 'LLM approval'
                 : waitingForRequirements
                   ? 'Requirements'
+                : waitingForAccess
+                  ? 'Access blocker'
                 : isWaiting
                   ? 'Human gate'
                   : runStarted && isRunning
@@ -755,6 +793,8 @@ function App() {
                   ? 'LLM approval'
                   : waitingForRequirements
                   ? 'Requirements chat'
+                  : waitingForAccess
+                  ? 'Access blocker'
                   : 'Human action required'
                 : isComplete
                   ? 'Production live'
@@ -851,13 +891,53 @@ function App() {
             </div>
 
             <div className="approval-list">
+              {activeAccessBlocker ? (
+                <article className="approval-row access-blocker-row">
+                  <div>
+                    <h3>
+                      <LockKeyhole size={18} />
+                      {activeAccessBlocker.environment} cloud access
+                    </h3>
+                    <p>{activeAccessBlocker.requestedResolution}</p>
+                    <div className="access-blocker-details">
+                      <span>Cloud: {activeAccessBlocker.cloudProvider}</span>
+                      <span>Action: {activeAccessBlocker.action}</span>
+                      <span>Resource: {activeAccessBlocker.resource}</span>
+                    </div>
+                    <ul>
+                      {activeAccessBlocker.instructions.map((instruction) => (
+                        <li key={instruction}>{instruction}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="access-blocker-actions">
+                    <button
+                      type="button"
+                      onClick={verifyAccessBlocker}
+                      disabled={!waitingForAccess || isSubmitting}
+                    >
+                      <UserCheck size={16} />
+                      Verify setup
+                    </button>
+                    <button
+                      type="button"
+                      onClick={keepAccessBlockerOpen}
+                      disabled={!waitingForAccess || isSubmitting}
+                    >
+                      <AlertTriangle size={16} />
+                      Still blocked
+                    </button>
+                  </div>
+                </article>
+              ) : null}
+
               <article className="approval-row">
                 <div>
                   <h3>
                     <GitMerge size={18} />
                     Manual PR merge
                   </h3>
-                  <p>{mergeApproved ? 'Merged into main.' : 'Required before deployments begin.'}</p>
+                  <p>{mergeApproved ? 'Merged into dev.' : 'Required before deployments begin.'}</p>
                 </div>
                 <button
                   type="button"
