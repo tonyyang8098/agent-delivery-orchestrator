@@ -20,6 +20,12 @@
   margin: 0;
 }
 
+.section-heading h2 {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 .topbar h1 {
   font-size: 32px;
   line-height: 1.1;
@@ -122,6 +128,18 @@ button:not(:disabled):active {
   background: var(--accent-dark);
 }
 
+.secondary-action {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-strong);
+  padding: 0 16px;
+}
+
+.secondary-action:not(:disabled):hover {
+  background: var(--surface-warm);
+  border-color: var(--border-strong);
+}
+
 .icon-action {
   background: var(--surface);
   border-color: var(--border);
@@ -135,6 +153,7 @@ button:not(:disabled):active {
 }
 
 .request-panel,
+.cost-panel,
 .requirements-panel,
 .workflow-panel,
 .agents-panel,
@@ -162,6 +181,75 @@ button:not(:disabled):active {
   margin: 0 auto 18px;
   max-width: 1480px;
   padding: 18px;
+}
+
+.cost-panel {
+  margin: 0 auto 18px;
+  max-width: 1480px;
+  padding: 18px;
+}
+
+.cost-layout {
+  align-items: center;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 0.85fr) minmax(420px, 1fr) auto;
+}
+
+.cost-layout h3 {
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.cost-layout p {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+.cost-metrics {
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.cost-metrics span {
+  background: #fbfcf8;
+  color: var(--text-muted);
+  display: grid;
+  font-size: 12px;
+  font-weight: 720;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  text-transform: uppercase;
+}
+
+.cost-metrics strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
+.cost-actions {
+  display: grid;
+  gap: 8px;
+  min-width: 176px;
+}
+
+.cost-actions button {
+  width: 100%;
 }
 
 .request-panel > *,
@@ -867,6 +955,7 @@ textarea:disabled {
 
 @media (max-width: 1180px) {
   .request-panel,
+  .cost-layout,
   .workspace-grid,
   .operations-grid {
     grid-template-columns: 1fr;
@@ -904,6 +993,7 @@ textarea:disabled {
   }
 
   .request-panel,
+  .cost-panel,
   .requirements-panel,
   .workflow-panel,
   .agents-panel,
@@ -921,6 +1011,14 @@ textarea:disabled {
 
   .requirements-layout {
     grid-template-columns: 1fr;
+  }
+
+  .cost-metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cost-actions {
+    min-width: 0;
   }
 
   .requirement-message {

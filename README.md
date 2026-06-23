@@ -59,7 +59,9 @@ Set:
 
 ```text
 OPENAI_API_KEY=your_api_key_here
-OPENAI_MODEL=gpt-5.5
+OPENAI_MODEL=gpt-4.1-mini
+LLM_REQUIRE_APPROVAL=true
+LLM_MAX_OUTPUT_TOKENS=300
 ```
 
 When `OPENAI_API_KEY` is present, each workflow step calls the OpenAI Responses API with the persona assigned to that step:
@@ -70,6 +72,25 @@ When `OPENAI_API_KEY` is present, each workflow step calls the OpenAI Responses 
 - DevOps agent
 
 When `OPENAI_API_KEY` is missing, the API automatically uses mock persona output so the local workflow remains testable.
+
+## LLM Cost Controls
+
+The local backend is conservative by default:
+
+- `OPENAI_MODEL` defaults to `gpt-4.1-mini`.
+- `LLM_REQUIRE_APPROVAL` defaults to `true`, so the API pauses before every paid LLM call.
+- `LLM_MAX_OUTPUT_TOKENS` defaults to `300`, keeping persona responses short.
+- Every pending LLM call shows estimated input tokens, maximum output tokens, and estimated total cost in the UI.
+- The operator can approve the paid call or choose mock output for `$0`.
+
+The approval endpoints are:
+
+```text
+POST /api/runs/:runId/llm/approve
+POST /api/runs/:runId/llm/mock
+```
+
+Cost estimates are guardrails for local budget control. The actual provider bill depends on the final model pricing and token usage returned by the API.
 
 Run the services separately if needed:
 

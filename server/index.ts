@@ -12,6 +12,7 @@ import {
   type GateType,
   type LlmProviderStatus,
   type LogEntry,
+  type PendingLlmCall,
   type RequirementChatMessage,
   type RequirementsState,
   type Tone,
@@ -20,6 +21,7 @@ import {
 
 type RunStatus =
   | 'requirements'
+  | 'llm-approval'
   | 'running'
   | 'paused'
   | 'waiting-for-human'
@@ -38,14 +40,26 @@ type OrchestratorRun = {
   updatedAt: string
   logEntries: LogEntry[]
   artifacts: AgentArtifact[]
+  pendingLlmCall?: PendingLlmCall
 }
 
 const app = express()
+const parsePositiveInteger = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
+}
+
 const host = process.env.API_HOST ?? '127.0.0.1'
-const port = Number(process.env.API_PORT ?? 3001)
-const stepDurationMs = Number(process.env.STEP_DURATION_MS ?? 1300)
-const openaiModel = process.env.OPENAI_MODEL ?? 'gpt-5.5'
+const port = parsePositiveInteger(process.env.API_PORT, 3001)
+const stepDurationMs = parsePositiveInteger(process.env.STEP_DURATION_MS, 1300)
+const openaiModel = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini'
 const openaiClient = process.env.OPENAI_API_KEY ? new OpenAI() : null
+const requireLlmApproval = process.env.LLM_REQUIRE_APPROVAL !== 'false'
+const llmMaxOutputTokens = parsePositiveInteger(process.env.LLM_MAX_OUTPUT_TOKENS, 300)
+
+const modelPricingUsdPerMillion: Record<string, { input: number; output: number }> = {
+  'gpt-4.1-mini': { input: 0.4, output: 1.6 },
+}
 
 const runs = new Map<string, OrchestratorRun>()
 const timers = new Map<string, NodeJS.Timeout>()
@@ -63,7 +77,7 @@ const personaPrompts: Record<AgentName, string> = {
     'You are the DevOps agent. Produce repository, pull request, deployment, environment, rollback, and release-control handoffs. Respect human approval gates.',
 }
 
-app.use(cors({ origin: ['http://127.0.0.1:5173', 'http://localhost:5173'] }))
+app.use(cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/] }))
 app.use(express.json({ limit: '1mb' }))
 
 const createId = () =>
@@ -103,6 +117,55 @@ const getLlmProvider = (): LlmProviderStatus => ({
   model: openaiClient ? openaiModel : 'mock-local-persona',
   configured: Boolean(openaiClient),
 })
+
+const estimateTokens = (value: string) => Math.ceil(value.length / 4)
+
+const estimateCost = (inputTokens: number, outputTokens: number) => {
+  const pricing = modelPricingUsdPerMillion[openaiModel] ?? modelPricingUsdPerMillion['gpt-4.1-mini']
+  const estimatedInputCostUsd = (inputTokens / 1_000_000) * pricing.input
+  const estimatedOutputCostUsd = (outputTokens / 1_000_000) * pricing.output
+
+  return {
+    estimatedInputCostUsd,
+    estimatedOutputCostUsd,
+    estimatedTotalCostUsd: estimatedInputCostUsd + estimatedOutputCostUsd,
+  }
+}
+
+const makePendingLlmCall = (
+  kind: PendingLlmCall['kind'],
+  title: string,
+  description: string,
+  inputText: string,
+  outputTokenMultiplier = 1,
+): PendingLlmCall => {
+  const estimatedInputTokens = estimateTokens(inputText)
+  const maxOutputTokens = llmMaxOutputTokens * outputTokenMultiplier
+  const costs = estimateCost(estimatedInputTokens, maxOutputTokens)
+
+  return {
+    id: createId(),
+    kind,
+    title,
+    description,
+    model: openaiModel,
+    estimatedInputTokens,
+    maxOutputTokens,
+    ...costs,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+const setPendingLlmCall = (run: OrchestratorRun, pendingLlmCall: PendingLlmCall) => {
+  run.pendingLlmCall = pendingLlmCall
+  run.isRunning = false
+  appendLog(
+    run,
+    'LLM approval',
+    `${pendingLlmCall.title} is waiting for approval. Estimated cost: $${pendingLlmCall.estimatedTotalCostUsd.toFixed(6)}.`,
+    'warning',
+  )
+}
 
 type BaRequirementDecision = {
   status: 'clarifying' | 'complete'
@@ -237,8 +300,9 @@ const buildBaRequirementInput = (run: OrchestratorRun) => {
 
 const createOpenAIBaDecision = async (
   run: OrchestratorRun,
+  forceMock = false,
 ): Promise<BaRequirementDecision> => {
-  if (!openaiClient) return createMockBaDecision(run)
+  if (forceMock || !openaiClient) return createMockBaDecision(run)
 
   const userAnswerCount = run.requirements.messages.filter(
     (message) => message.role === 'user',
@@ -255,6 +319,7 @@ const createOpenAIBaDecision = async (
     model: openaiModel,
     instructions: personaPrompts['Business analyst agent'],
     input: buildBaRequirementInput(run),
+    max_output_tokens: llmMaxOutputTokens,
   })
 
   return parseBaDecision(response.output_text)
@@ -279,16 +344,46 @@ const createRequirementsArtifact = (
   createdAt: new Date().toISOString(),
 })
 
-const continueBaRequirements = async (run: OrchestratorRun) => {
+const continueBaRequirements = async (
+  run: OrchestratorRun,
+  options: { approved?: boolean; forceMock?: boolean } = {},
+) => {
   try {
     const hadBaseline = Boolean(run.requirements.baselineArtifactId)
-    const decision = await createOpenAIBaDecision(run)
+    const userAnswerCount = run.requirements.messages.filter(
+      (message) => message.role === 'user',
+    ).length - 1
+
+    if (
+      openaiClient &&
+      requireLlmApproval &&
+      !options.approved &&
+      !options.forceMock &&
+      userAnswerCount >= 1
+    ) {
+      const input = `${personaPrompts['Business analyst agent']}\n\n${buildBaRequirementInput(run)}`
+      setPendingLlmCall(
+        run,
+        makePendingLlmCall(
+          'ba-requirements',
+          hadBaseline ? 'Revise BA baseline' : 'Continue BA requirements',
+          hadBaseline
+            ? 'Analyze the requested scope change and update the active baseline document.'
+            : 'Analyze the requirements transcript and ask the next question or create the baseline document.',
+          input,
+        ),
+      )
+      return
+    }
+
+    run.pendingLlmCall = undefined
+    const decision = await createOpenAIBaDecision(run, options.forceMock)
 
     if (decision.status === 'complete' && decision.requirementsDocument) {
       const artifact = createRequirementsArtifact(
         run,
         decision.requirementsDocument,
-        openaiClient ? 'openai' : 'mock',
+        options.forceMock || !openaiClient ? 'mock' : 'openai',
       )
       run.artifacts = [...run.artifacts, artifact]
       run.requirements.status = 'complete'
@@ -433,13 +528,15 @@ const createOpenAIArtifact = async (
   run: OrchestratorRun,
   step: WorkflowStep,
   agentName: AgentName,
+  forceMock = false,
 ): Promise<AgentArtifact> => {
-  if (!openaiClient) return createMockArtifact(run, step, agentName)
+  if (forceMock || !openaiClient) return createMockArtifact(run, step, agentName)
 
   const response = await openaiClient.responses.create({
     model: openaiModel,
     instructions: personaPrompts[agentName],
     input: buildAgentInput(run, step, agentName),
+    max_output_tokens: llmMaxOutputTokens,
   })
 
   const output = response.output_text.trim()
@@ -462,12 +559,13 @@ const createOpenAIArtifact = async (
 const createAgentArtifacts = async (
   run: OrchestratorRun,
   step: WorkflowStep,
+  forceMock = false,
 ) => {
   const artifacts: AgentArtifact[] = []
 
   for (const agentName of step.agents) {
     try {
-      artifacts.push(await createOpenAIArtifact(run, step, agentName))
+      artifacts.push(await createOpenAIArtifact(run, step, agentName, forceMock))
     } catch (error) {
       const fallback = createMockArtifact(run, step, agentName)
       fallback.summary =
@@ -495,18 +593,22 @@ const getCurrentStep = (run: OrchestratorRun) => WORKFLOW[run.currentStepIndex]
 const getRunFlags = (run: OrchestratorRun) => {
   const currentStep = getCurrentStep(run)
   const isComplete = run.currentStepIndex >= WORKFLOW.length
+  const waitingForLlmApproval = Boolean(run.pendingLlmCall)
   const waitingForRequirements = run.requirements.status === 'clarifying'
   const waitingForMerge =
     Boolean(currentStep?.gate === 'merge') && !run.mergeApproved
   const waitingForProd =
     Boolean(currentStep?.gate === 'prod') && !run.prodApproved
   const isWaiting =
-    !isComplete && (waitingForRequirements || waitingForMerge || waitingForProd)
+    !isComplete &&
+    (waitingForLlmApproval || waitingForRequirements || waitingForMerge || waitingForProd)
   const progress = Math.round(
     (Math.min(run.currentStepIndex, WORKFLOW.length) / WORKFLOW.length) * 100,
   )
   const status: RunStatus = isComplete
     ? 'complete'
+    : waitingForLlmApproval
+      ? 'llm-approval'
     : waitingForRequirements
       ? 'requirements'
       : waitingForMerge || waitingForProd
@@ -518,6 +620,7 @@ const getRunFlags = (run: OrchestratorRun) => {
   return {
     currentStep,
     isComplete,
+    waitingForLlmApproval,
     waitingForRequirements,
     waitingForMerge,
     waitingForProd,
@@ -551,7 +654,18 @@ const clearRunTimer = (runId: string) => {
   }
 }
 
-const completeActiveStep = async (runId: string) => {
+const buildAgentStepApprovalInput = (run: OrchestratorRun, step: WorkflowStep) =>
+  step.agents
+    .map(
+      (agentName) =>
+        `${personaPrompts[agentName]}\n\n${buildAgentInput(run, step, agentName)}`,
+    )
+    .join('\n\n---\n\n')
+
+const completeActiveStep = async (
+  runId: string,
+  options: { approved?: boolean; forceMock?: boolean } = {},
+) => {
   const run = runs.get(runId)
   if (!run) return
 
@@ -561,17 +675,48 @@ const completeActiveStep = async (runId: string) => {
 
   try {
     const flags = getRunFlags(run)
-    if (!run.isRunning || flags.isWaiting || flags.isComplete) return
+    const isApprovedPendingAgentCall =
+      Boolean(run.pendingLlmCall?.kind === 'agent-step') &&
+      Boolean(options.approved || options.forceMock)
+    if (
+      !run.isRunning ||
+      flags.isComplete ||
+      (flags.isWaiting && !isApprovedPendingAgentCall)
+    ) {
+      return
+    }
 
     const step = getCurrentStep(run)
     if (!step) return
 
+    if (
+      openaiClient &&
+      requireLlmApproval &&
+      !options.approved &&
+      !options.forceMock
+    ) {
+      setPendingLlmCall(
+        run,
+        makePendingLlmCall(
+          'agent-step',
+          `${step.label} persona handoff`,
+          `Run ${step.agents.join(' + ')} for ${step.label}.`,
+          buildAgentStepApprovalInput(run, step),
+          step.agents.length,
+        ),
+      )
+      return
+    }
+
+    run.pendingLlmCall = undefined
     appendLog(
       run,
       'LLM provider',
-      `Running ${step.agents.join(' + ')} with ${getLlmProvider().mode} provider.`,
+      `Running ${step.agents.join(' + ')} with ${
+        options.forceMock ? 'mock' : getLlmProvider().mode
+      } provider.`,
     )
-    await createAgentArtifacts(run, step)
+    await createAgentArtifacts(run, step, options.forceMock)
 
     appendLog(
       run,
@@ -740,6 +885,63 @@ app.post('/api/runs/:runId/requirements/messages', async (request, response) => 
   )
   await continueBaRequirements(run)
 
+  response.json({ run: serializeRun(run) })
+})
+
+app.post('/api/runs/:runId/llm/approve', async (request, response) => {
+  const run = runs.get(request.params.runId)
+  if (!run) {
+    response.status(404).json(notFound)
+    return
+  }
+
+  const pending = run.pendingLlmCall
+  if (!pending) {
+    response.status(409).json({ error: 'No LLM call is waiting for approval.' })
+    return
+  }
+
+  appendLog(
+    run,
+    'User',
+    `Approved ${pending.title}. Estimated cost: $${pending.estimatedTotalCostUsd.toFixed(6)}.`,
+    'success',
+  )
+
+  if (pending.kind === 'ba-requirements') {
+    await continueBaRequirements(run, { approved: true })
+    response.json({ run: serializeRun(run) })
+    return
+  }
+
+  run.isRunning = true
+  await completeActiveStep(run.id, { approved: true })
+  response.json({ run: serializeRun(run) })
+})
+
+app.post('/api/runs/:runId/llm/mock', async (request, response) => {
+  const run = runs.get(request.params.runId)
+  if (!run) {
+    response.status(404).json(notFound)
+    return
+  }
+
+  const pending = run.pendingLlmCall
+  if (!pending) {
+    response.status(409).json({ error: 'No LLM call is waiting for approval.' })
+    return
+  }
+
+  appendLog(run, 'User', `Chose mock output for ${pending.title}.`, 'success')
+
+  if (pending.kind === 'ba-requirements') {
+    await continueBaRequirements(run, { forceMock: true })
+    response.json({ run: serializeRun(run) })
+    return
+  }
+
+  run.isRunning = true
+  await completeActiveStep(run.id, { forceMock: true })
   response.json({ run: serializeRun(run) })
 })
 

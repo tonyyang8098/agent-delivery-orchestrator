@@ -4,6 +4,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
+  BadgeDollarSign,
   Boxes,
   Bug,
   CheckCircle2,
@@ -39,6 +40,7 @@ import {
   type GateType,
   type LlmProviderStatus,
   type LogEntry,
+  type PendingLlmCall,
   type RequirementsState,
   type StepState,
   type WorkflowStep,
@@ -48,6 +50,7 @@ import './App.css'
 type ApiStatus = 'checking' | 'online' | 'offline'
 type RunStatus =
   | 'requirements'
+  | 'llm-approval'
   | 'running'
   | 'paused'
   | 'waiting-for-human'
@@ -67,6 +70,7 @@ type OrchestratorRun = {
   logEntries: LogEntry[]
   currentStep?: WorkflowStep
   isComplete: boolean
+  waitingForLlmApproval: boolean
   waitingForRequirements: boolean
   waitingForMerge: boolean
   waitingForProd: boolean
@@ -75,6 +79,7 @@ type OrchestratorRun = {
   status: RunStatus
   artifacts: AgentArtifact[]
   llmProvider: LlmProviderStatus
+  pendingLlmCall?: PendingLlmCall
 }
 
 type RunResponse = {
@@ -169,6 +174,7 @@ function App() {
   const currentStepIndex = run?.currentStepIndex ?? 0
   const currentStep = WORKFLOW[currentStepIndex]
   const isComplete = Boolean(run?.isComplete)
+  const waitingForLlmApproval = Boolean(run?.waitingForLlmApproval)
   const waitingForRequirements = Boolean(run?.waitingForRequirements)
   const waitingForMerge = Boolean(run?.waitingForMerge)
   const waitingForProd = Boolean(run?.waitingForProd)
@@ -179,12 +185,13 @@ function App() {
   const progress = run?.progress ?? 0
   const logEntries = run?.logEntries ?? defaultLogEntries
   const artifacts = run?.artifacts ?? []
+  const pendingLlmCall = run?.pendingLlmCall
   const requirementMessages = run?.requirements.messages ?? []
   const baselineRequirement = run?.requirements.baselineArtifactId
     ? artifacts.find((artifact) => artifact.id === run.requirements.baselineArtifactId)
     : undefined
   const canSendRequirementMessage =
-    runStarted && apiStatus === 'online' && !isSubmitting
+    runStarted && apiStatus === 'online' && !isSubmitting && !waitingForLlmApproval
 
   const branchName = useMemo(() => {
     if (run?.branchName) return run.branchName
@@ -251,6 +258,7 @@ function App() {
     if (!runStarted) return 'pending'
     if (index < currentStepIndex) return 'complete'
     if (index > currentStepIndex || isComplete) return 'pending'
+    if (waitingForLlmApproval) return 'waiting'
     if (index === 0 && waitingForRequirements) return 'waiting'
     if (WORKFLOW[index].gate && isWaiting) return 'waiting'
     return 'active'
@@ -277,6 +285,26 @@ function App() {
       requestApi<RunResponse>(`/api/runs/${run.id}/requirements/messages`, {
         method: 'POST',
         body: JSON.stringify({ message }),
+      }),
+    )
+  }
+
+  const approveLlmCall = () => {
+    if (!run) return
+
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/llm/approve`, {
+        method: 'POST',
+      }),
+    )
+  }
+
+  const useMockForLlmCall = () => {
+    if (!run) return
+
+    void mutateRun(() =>
+      requestApi<RunResponse>(`/api/runs/${run.id}/llm/mock`, {
+        method: 'POST',
       }),
     )
   }
@@ -443,6 +471,8 @@ function App() {
             <strong>
               {isComplete
                 ? 'Complete'
+                : waitingForLlmApproval
+                  ? 'LLM approval'
                 : waitingForRequirements
                   ? 'Requirements'
                 : isWaiting
@@ -460,6 +490,64 @@ function App() {
           </div>
         </div>
       </section>
+
+      {pendingLlmCall ? (
+        <section className="cost-panel" aria-label="LLM cost approval">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">Quota control</p>
+              <h2>
+                <BadgeDollarSign size={20} />
+                Approve LLM spend
+              </h2>
+            </div>
+            <span className="status-pill warning">Approval required</span>
+          </div>
+          <div className="cost-layout">
+            <div>
+              <h3>{pendingLlmCall.title}</h3>
+              <p>{pendingLlmCall.description}</p>
+            </div>
+            <div className="cost-metrics">
+              <span>
+                Model
+                <strong>{pendingLlmCall.model}</strong>
+              </span>
+              <span>
+                Est. input
+                <strong>{pendingLlmCall.estimatedInputTokens.toLocaleString()} tokens</strong>
+              </span>
+              <span>
+                Max output
+                <strong>{pendingLlmCall.maxOutputTokens.toLocaleString()} tokens</strong>
+              </span>
+              <span>
+                Est. total
+                <strong>${pendingLlmCall.estimatedTotalCostUsd.toFixed(6)}</strong>
+              </span>
+            </div>
+            <div className="cost-actions">
+              <button
+                type="button"
+                className="primary-action"
+                onClick={approveLlmCall}
+                disabled={isSubmitting}
+              >
+                <BadgeDollarSign size={17} />
+                Approve LLM call
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={useMockForLlmCall}
+                disabled={isSubmitting}
+              >
+                Use mock for $0
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="requirements-panel" aria-label="Requirements chat">
         <div className="section-heading compact">
@@ -547,7 +635,9 @@ function App() {
             </div>
             <span className={`status-pill ${isWaiting ? 'warning' : isComplete ? 'success' : ''}`}>
               {isWaiting
-                ? waitingForRequirements
+                ? waitingForLlmApproval
+                  ? 'LLM approval'
+                  : waitingForRequirements
                   ? 'Requirements chat'
                   : 'Human action required'
                 : isComplete

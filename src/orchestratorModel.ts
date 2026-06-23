@@ -59,6 +59,20 @@ export type LlmProviderStatus = {
   configured: boolean
 }
 
+export type PendingLlmCall = {
+  id: string
+  kind: 'ba-requirements' | 'agent-step'
+  title: string
+  description: string
+  model: string
+  estimatedInputTokens: number
+  maxOutputTokens: number
+  estimatedInputCostUsd: number
+  estimatedOutputCostUsd: number
+  estimatedTotalCostUsd: number
+  createdAt: string
+}
+
 export type RequirementChatMessage = {
   id: string
   role: 'user' | 'ba'
